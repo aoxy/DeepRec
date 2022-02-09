@@ -1733,5 +1733,45 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         for j in range(3):
           self.assertAlmostEqual(emb_ori[i][j], emb_right[i][j])      
 
+  def testEmbeddingVariableForDRAMAndLEVELDB(self):
+    print("testEmbeddingVariableForDRAMAndLEVELDB")
+    def runTestAdagrad(self, var, g):
+      ids = array_ops.placeholder(dtypes.int64, name="ids")
+      #emb = embedding_ops.embedding_lookup(var, math_ops.cast([0,1,2,5,6,7], dtypes.int64))
+      emb = embedding_ops.embedding_lookup(var, ids)
+      fun = math_ops.multiply(emb, 2.0, name='multiply')
+      loss = math_ops.reduce_sum(fun, name='reduce_sum')
+      gs = training_util.get_or_create_global_step()
+      opt = adagrad.AdagradOptimizer(0.1)
+      g_v = opt.compute_gradients(loss)
+      train_op = opt.apply_gradients(g_v)
+      init = variables.global_variables_initializer()
+      with self.test_session(graph=g) as sess:
+        sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
+        sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
+        sess.run([init])
+        while True:
+          for i in xrange(1500000000):
+            r, _, _ = sess.run([emb, train_op,loss], feed_dict={"ids:0": i})
+            import time
+            #time.sleep(0.2)
+        return r
+
+    with ops.device('/cpu:0'), ops.Graph().as_default() as g:
+      emb_var = variable_scope.get_embedding_variable("var_1",
+            embedding_dim = 300,
+            initializer=init_ops.ones_initializer(dtypes.float32),
+            partitioner=partitioned_variables.fixed_size_partitioner(num_shards=1),
+            steps_to_live=5,
+            ev_option = variables.EmbeddingVariableOption(storage_option=variables.StorageOption(storage_type=config_pb2.StorageType.DRAM_LEVELDB,
+                                                                                                 storage_path="1/2/3/")))
+      #var = variable_scope.get_variable("var_2", shape=[100, 3], initializer=init_ops.ones_initializer(dtypes.float32))
+      emb1 = runTestAdagrad(self, emb_var, g)
+      #emb2 = runTestAdagrad(self, var, g)
+
+      #for i in range(0, 6):
+      #  for j in range(0, 3):
+      #    self.assertEqual(emb1.tolist()[i][j], emb2.tolist()[i][j])
+
 if __name__ == "__main__":
   googletest.main()
