@@ -55,7 +55,7 @@ class KVInterface {
   // KV Size
   virtual int64 Size() const = 0;
 
-  virtual void SetNewValuePtrFunc(std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn) {}
+  virtual void SetTotalDims(int total_dims) {}
 
   virtual void FreeValuePtr(ValuePtr<V>* value_ptr) {}
 
