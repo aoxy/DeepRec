@@ -4,6 +4,7 @@
 #include "tensorflow/core/framework/embedding/cache.h"
 #include "tensorflow/core/framework/embedding/config.pb.h"
 #include "tensorflow/core/framework/embedding/dense_hash_map.h"
+#include "tensorflow/core/framework/embedding/leveldb_kv.h"
 #include "tensorflow/core/framework/embedding/lockless_hash_map.h"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -50,31 +51,34 @@ class StorageManager {
   }
 
   Status Init() {
+    new_value_ptr_fn_ = [] (size_t size) { return new NormalContiguousValuePtr<V>(size); };
     switch (sc_.type) {
       case StorageType::DRAM:
       case StorageType::PMEM:
+        LOG(INFO) << "StorageManager::DRAM: " << name_;
         kvs_.push_back(new LocklessHashMap<K, V>());
         break;
       case StorageType::LEVELDB:
-        kvs_.push_back(new LocklessHashMap<K, V>());
+        LOG(INFO) << "StorageManager::LEVELDB: " << name_;
+        kvs_.push_back(new LevelDBKV<K, V>(sc_.path));
         break;
       case StorageType::DRAM_LEVELDB:
+        LOG(INFO) << "StorageManager::DRAM_LEVELDB: " << name_;
         kvs_.push_back(new LocklessHashMap<K, V>());
-        // TODO DB HASHMAP
-        kvs_.push_back(new LocklessHashMap<K, V>());
+        kvs_.push_back(new LevelDBKV<K, V>(sc_.path));
         break;
       default:
+        LOG(INFO) << "StorageManager::default";
         kvs_.push_back(new LocklessHashMap<K, V>());
         break;
     }
     hash_table_count_ = kvs_.size();
-    new_value_ptr_fn_ = [] (size_t size) { return new NormalContiguousValuePtr<V>(size); };
     if (hash_table_count_ > 1) {
       cache_ = new LRUCache<K>();
       eviction_thread_ = Env::Default()->StartThread(ThreadOptions(), "EV_Eviction",
                                                      [this]() { BatchEviction(); });
     }
-    DebugString();
+    //DebugString();
     CHECK(2 >= hash_table_count_) << "Not support multi-level(>2) embedding.";
 
     return Status::OK();
@@ -164,6 +168,9 @@ class StorageManager {
       // set slot_dims/slot_offset done
       mutex_lock l(mu_);
       done_ = true;
+      for (auto kv : kvs_) {
+        kv->SetTotalDims(total_dims_);
+      }
     }
     flag_.clear(std::memory_order_release);
   }
@@ -180,9 +187,10 @@ class StorageManager {
   }
 
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
-    for (auto kv : kvs_) {
-      TF_CHECK_OK(kv->Commit(key, value_ptr));
-    }
+    // for (auto kv : kvs_) {
+    //   TF_CHECK_OK(kv->Commit(key, value_ptr));
+    // }
+    TF_CHECK_OK(kvs_[0]->Commit(key, value_ptr));
     return Status::OK();
   }
 
@@ -227,6 +235,7 @@ class StorageManager {
           if (kvs_[0]->Lookup(evic_ids[i], &value_ptr).ok()) {
             TF_CHECK_OK(kvs_[0]->Remove(evic_ids[i]));
             //TF_CHECK_OK(kvs_[1]->Insert(evic_ids[i], value_ptr));
+            TF_CHECK_OK(kvs_[1]->Commit(evic_ids[i], value_ptr));
             delete value_ptr;
           } else {
             // bypass
