@@ -236,7 +236,7 @@ class StorageManager {
             TF_CHECK_OK(kvs_[0]->Remove(evic_ids[i]));
             //TF_CHECK_OK(kvs_[1]->Insert(evic_ids[i], value_ptr));
             TF_CHECK_OK(kvs_[1]->Commit(evic_ids[i], value_ptr));
-            delete value_ptr;
+            // delete value_ptr;
           } else {
             // bypass
           }
