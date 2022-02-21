@@ -43,14 +43,13 @@ class LevelDBKV : public KVInterface<K, V> {
   Status Lookup(K key, ValuePtr<V>** value_ptr) {
     std::string val_str;
     leveldb::Slice db_key((char*)(&key), sizeof(void*));
-    ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
     leveldb::ReadOptions options;
     leveldb::Status s = db_->Get(options, db_key, &val_str);
     if (s.IsNotFound()) {
-      delete val;
       return errors::NotFound(
           "Unable to find Key: ", key, " in RocksDB.");
     } else {
+      ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       memcpy((int64 *)(val->GetPtr()), &val_str[0], val_str.length());
       *value_ptr = val;
       return Status::OK();

@@ -7,6 +7,7 @@
 #include "tensorflow/core/framework/embedding/leveldb_kv.h"
 #include "tensorflow/core/framework/embedding/lockless_hash_map.h"
 #include "tensorflow/core/framework/embedding/kv_interface.h"
+#include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/core/status.h"
 
 namespace tensorflow {
@@ -77,8 +78,11 @@ class StorageManager {
       cache_ = new LRUCache<K>();
       eviction_thread_ = Env::Default()->StartThread(ThreadOptions(), "EV_Eviction",
                                                      [this]() { BatchEviction(); });
+      thread_pool_.reset(new thread::ThreadPool(Env::Default(), ThreadOptions(),
+                                               "MultiLevel_Embedding_Cache", 2,
+                                               /*low_latency_hint=*/false));
     }
-    //DebugString();
+    // DebugString();
     CHECK(2 >= hash_table_count_) << "Not support multi-level(>2) embedding.";
 
     return Status::OK();
@@ -90,12 +94,13 @@ class StorageManager {
     LOG(INFO) << "Storage Path: " << sc_.path;
   }
 
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr, size_t size) {
-
+  void Schedule(std::function<void()> fn) {
     if (hash_table_count_ > 1) {
-      cache_->add_to_rank(&key, 1);
+      thread_pool_->Schedule(std::move(fn));
     }
+  }
 
+  Status GetOrCreate(K key, ValuePtr<V>** value_ptr, size_t size) {
     bool found = false;
     int level = 0;
     for (; level < hash_table_count_; ++level) {
@@ -187,9 +192,6 @@ class StorageManager {
   }
 
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
-    // for (auto kv : kvs_) {
-    //   TF_CHECK_OK(kv->Commit(key, value_ptr));
-    // }
     TF_CHECK_OK(kvs_[0]->Commit(key, value_ptr));
     return Status::OK();
   }
@@ -214,6 +216,7 @@ class StorageManager {
       // default 1GB cache size approximately
       cache_capacity_ = 1024 * 1024 * 1024 / (GetTotalDims() * sizeof(V));
     }
+    LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
     K evic_ids[kSize];
     while (true) {
       mutex_lock l(mu_);
@@ -241,7 +244,7 @@ class StorageManager {
             // bypass
           }
         }
-        LOG(INFO) << "kvs_[0] size:"<< kvs_[0]->Size() << ", kvs_[1] size: " << kvs_[1]->Size();
+        //LOG(INFO) << "kvs_[0] size:"<< kvs_[0]->Size() << ", kvs_[1] size: " << kvs_[1]->Size();
         //delete[] evic_ids;
       }
     }
@@ -253,6 +256,8 @@ class StorageManager {
   std::vector<KVInterface<K, V>*> kvs_;
   std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn_;
   StorageConfig sc_;
+
+  std::unique_ptr<thread::ThreadPool> thread_pool_;
   Thread* eviction_thread_;
   BatchCache<K>* cache_;
   size_t cache_capacity_;
