@@ -130,6 +130,9 @@ class StorageManager {
   }
 
   Status Remove(K key) {
+    for (auto kv : kvs_) {
+      kv->Remove(key);
+    }
     return Status::OK();
   }
 
@@ -143,6 +146,9 @@ class StorageManager {
 
   Status GetSnapshot(std::vector<K>* key_list,
                      std::vector<ValuePtr<V>* >* value_ptr_list) {
+    for (auto kv : kvs_) {
+      TF_CHECK_OK(kv->GetSnapshot(key_list, value_ptr_list));
+    }
     return Status::OK();
   }
 
