@@ -383,13 +383,22 @@ class KvResourceGatherOp : public OpKernel {
       } else {
         auto do_work = [this, indices_flat,
              out_base, slice_elems, c, ev] (int64 start, int64 limit) {
+          std::vector<TKey> ids;
           for (int64 i = start; i < limit; ++i) {
             TValue* default_v;
             default_v = ev->GetDefaultValuePtr() +
                           ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
             ev->LookupOrCreate(indices_flat(i),
                 out_base + i * slice_elems, default_v);          
+            ids.push_back(indices_flat(i));
           }
+
+          ev->storage_manager()->Schedule([ev, ids]() {
+            embedding::BatchCache<TKey>* cache = ev->Cache();
+            if (cache) {
+              cache->add_to_rank(ids.data(), ids.size());
+            }
+          });
         };
 
         auto worker_threads = c->device()->tensorflow_cpu_worker_threads();

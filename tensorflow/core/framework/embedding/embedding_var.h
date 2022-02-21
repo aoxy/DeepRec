@@ -384,6 +384,10 @@ class EmbeddingVar : public ResourceBase {
     emb_config_.slot_num = slot_num;
   }
 
+  embedding::BatchCache<K>* Cache() {
+    return storage_manager_->Cache();
+  }
+
  private:
   std::string name_;
   bool is_initialized_ = false;
