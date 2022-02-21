@@ -105,7 +105,7 @@ class LevelDBKV : public KVInterface<K, V> {
   Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
     WriteBatch batch;
     for (int i = 0; i < keys.size(); i++) {
-      std::string value_res((char*)value_ptrs[i]->GetPtr(), sizeof(FixedLengthHeader) +  KVInterface<K, V>::total_dims_ * sizeof(V));
+      std::string value_res((char*)value_ptrs[i]->GetPtr(), sizeof(FixedLengthHeader) + total_dims_ * sizeof(V));
       leveldb::Slice db_key((char*)(&keys[i]), sizeof(void*));
       batch.Put(db_key, value_res);
       delete value_ptrs[i];

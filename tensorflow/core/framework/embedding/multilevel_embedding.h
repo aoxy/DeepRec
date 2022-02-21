@@ -55,7 +55,7 @@ class StorageManager {
     new_value_ptr_fn_ = [] (size_t size) { return new NormalContiguousValuePtr<V>(size); };
     switch (sc_.type) {
       case StorageType::DRAM:
-      case StorageType::PMEM:
+      case StorageType::PMEM_LIBPMEM:
         LOG(INFO) << "StorageManager::DRAM: " << name_;
         kvs_.push_back(new LocklessHashMap<K, V>());
         break;
@@ -148,6 +148,13 @@ class StorageManager {
                      std::vector<ValuePtr<V>* >* value_ptr_list) {
     for (auto kv : kvs_) {
       TF_CHECK_OK(kv->GetSnapshot(key_list, value_ptr_list));
+    }
+    return Status::OK();
+  }
+
+  Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
+    for (auto kv : kvs_) {
+      TF_CHECK_OK(kv->BatchCommit(keys, value_ptrs));
     }
     return Status::OK();
   }

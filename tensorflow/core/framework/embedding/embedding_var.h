@@ -167,7 +167,7 @@ class EmbeddingVar : public ResourceBase {
   }
 
   void BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
-    Status s = kv_->BatchCommit(keys, value_ptrs);
+    Status s = storage_manager_->BatchCommit(keys, value_ptrs);
   } 
 
   int64 GetVersion(K key) {
