@@ -280,7 +280,7 @@ class EmbeddingVar : public ResourceBase {
     storage_manager_->GetSnapshot(&key_list_tmp, &value_ptr_list);
     for (int64 i = 0; i < key_list_tmp.size(); ++i) {
       V* val = value_ptr_list[i]->GetValue(emb_config_.emb_index, value_len_, storage_manager_->GetOffset(emb_config_.emb_index));
-      V* primary_val = value_ptr_list[i]->GetValue(emb_config_.primary_emb_index, value_len_, storage_manager_->GetOffset(emb_config_.emb_index));
+      V* primary_val = value_ptr_list[i]->GetValue(emb_config_.primary_emb_index, value_len_, storage_manager_->GetOffset(emb_config_.primary_emb_index));
       if (val != nullptr && primary_val != nullptr) {
         value_list->push_back(val);
         key_list->push_back(key_list_tmp[i]);
@@ -293,7 +293,7 @@ class EmbeddingVar : public ResourceBase {
           version_list->push_back(dump_version);
         }
       }
-      storage_manager_->FreeValuePtr(value_ptr_list[i]);
+      // storage_manager_->FreeValuePtr(value_ptr_list[i]);
     }
     return key_list->size();
   }
