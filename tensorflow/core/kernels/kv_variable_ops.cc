@@ -140,7 +140,7 @@ class InitializeKvVariableOp : public OpKernel {
     OP_REQUIRES_OK(c, c->GetAttr("l2_weight_threshold", &l2_weight_threshold_));
 
     OP_REQUIRES_OK(c, c->GetAttr("layout", &layout_));
-    
+
     OP_REQUIRES_OK(c, c->GetAttr("default_value_dim", &default_value_dim_));
 
     int64 storage_type = 0;
@@ -167,7 +167,7 @@ class InitializeKvVariableOp : public OpKernel {
     OP_REQUIRES_OK(c, c->GetAttr("ht_type", &ht_type_));
     if (embedding::StorageType::LEVELDB == storage_type_) {
       ht_type_ = "leveldb_kv";
-      if (layout_ != "normal_fix") 
+      if (layout_ != "normal_fix")
         LOG(WARNING)<<"layout must be NORAML_FIX when storage type is LEVELDB";
       layout_ = "normal_fix";
     }
@@ -176,7 +176,7 @@ class InitializeKvVariableOp : public OpKernel {
 
   void Compute(OpKernelContext* context) override {
     const Tensor& default_values = context->input(2);
-    
+
     OP_REQUIRES(context, dtype_ == default_values.dtype(),
                 errors::InvalidArgument(
                     "Variable and value dtypes don't match; respectively, ",
@@ -222,7 +222,6 @@ class InitializeKvVariableOp : public OpKernel {
            context, handle_primary, &primary_variable,
            [this, default_values, opname, slotnum,
             handle_primary](EmbeddingVar<TKey, TValue>** ptr) {
-              LOG(INFO)<<"******";
              int64 primary_slot_index(0), primary_emb_index(0);
              auto storage_manager = new embedding::StorageManager<TKey, TValue>(
                  handle_primary.name(), embedding::StorageConfig(storage_type_, storage_path_));
@@ -351,6 +350,15 @@ class KvResourceGatherOp : public OpKernel {
     Tensor* out = nullptr;
     OP_REQUIRES_OK(c, c->allocate_output(0, result_shape, &out));
 
+    std::function<void(TKey, TValue*, TValue*)> lookup_or_create_fn;
+    if (ev->IsMultiLevel()) {
+      lookup_or_create_fn = [ev] (TKey index, TValue* out, TValue* default_v){
+                                  ev->LookupOrCreateWithFreq(index, out, default_v);};
+    } else {
+      lookup_or_create_fn = [ev] (TKey index, TValue* out, TValue* default_v){
+                                  ev->LookupOrCreate(index, out, default_v);};
+    }
+
     if (N > 0) {
       auto out_flat = out->shaped<TValue, 2>({N, out->NumElements() / N});
       TValue* out_base = &out_flat(0, 0);
@@ -366,14 +374,14 @@ class KvResourceGatherOp : public OpKernel {
       if (is_use_default_value_tensor_) {
         Tensor default_values(c->input(2));
         auto default_values_matrix = default_values.shaped<TValue, 2>(
-            {default_values.NumElements()/ev->ValueLen(), ev->ValueLen()});     
+            {default_values.NumElements()/ev->ValueLen(), ev->ValueLen()});
         auto do_work = [this, indices_flat,
              out_base, slice_elems, c, ev, default_values_matrix] (int64 start, int64 limit) {
           for (int64 i = start; i < limit; ++i) {
             TValue* default_v;
             default_v = &default_values_matrix(i, 0);
             ev->LookupOrCreate(indices_flat(i),
-                out_base + i * slice_elems, default_v);          
+                out_base + i * slice_elems, default_v);
           }
         };
 
@@ -382,14 +390,16 @@ class KvResourceGatherOp : public OpKernel {
             slice_bytes, do_work);
       } else {
         auto do_work = [this, indices_flat,
-             out_base, slice_elems, c, ev] (int64 start, int64 limit) {
+             out_base, slice_elems, c, ev, lookup_or_create_fn] (int64 start, int64 limit) {
           std::vector<TKey> ids;
           for (int64 i = start; i < limit; ++i) {
             TValue* default_v;
             default_v = ev->GetDefaultValuePtr() +
                           ((indices_flat(i)) % ev->GetDefaultValueDim()) * ev->ValueLen();
-            ev->LookupOrCreate(indices_flat(i),
-                out_base + i * slice_elems, default_v);          
+            /*ev->LookupOrCreate(indices_flat(i),
+                out_base + i * slice_elems, default_v);*/
+            lookup_or_create_fn(indices_flat(i),
+                out_base + i * slice_elems, default_v);
             ids.push_back(indices_flat(i));
           }
 

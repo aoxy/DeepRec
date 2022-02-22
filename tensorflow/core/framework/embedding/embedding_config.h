@@ -24,6 +24,7 @@ struct EmbeddingConfig {
   int64 storage_size;
   int64 default_value_dim;
   int normal_fix_flag;
+  bool is_multi_level;
 
   EmbeddingConfig(int64 emb_index = 0, int64 primary_emb_index = 0,
                   int64 block_num = 1, int slot_num = 0,
@@ -48,7 +49,8 @@ struct EmbeddingConfig {
       storage_path(storage_path),
       storage_size(storage_size),
       default_value_dim(default_value_dim),
-      normal_fix_flag(0) {
+      normal_fix_flag(0),
+      is_multi_level(false) {
     if ("normal" == layout) {
       layout_type = LayoutType::NORMAL;
     } else if ("light" == layout) {
@@ -61,7 +63,7 @@ struct EmbeddingConfig {
     }
     if (max_element_size != 0 && false_positive_probability != -1.0){
       kHashFunc = calc_num_hash_func(false_positive_probability);
-      num_counter = calc_num_counter(max_element_size, false_positive_probability); 
+      num_counter = calc_num_counter(max_element_size, false_positive_probability);
     } else {
       kHashFunc = 0;
       num_counter = 0;
@@ -69,8 +71,13 @@ struct EmbeddingConfig {
     if (layout_type == LayoutType::NORMAL_FIX) {
       normal_fix_flag = 1;
     }
+    if (storage_type == embedding::PMEM_MEMKIND || storage_type == embedding::PMEM_LIBPMEM ||
+        storage_type == embedding::DRAM_PMEM || storage_type == embedding::DRAM_SSD ||
+        storage_type == embedding::HBM_DRAM || storage_type == embedding::DRAM_LEVELDB) {
+      is_multi_level = true;
+    }
   }
-  
+
   int64 calc_num_counter(int64 max_element_size, float false_positive_probability) {
     float loghpp = fabs(log(false_positive_probability));
     float factor = log(2) * log(2);
