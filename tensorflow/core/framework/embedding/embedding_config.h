@@ -30,7 +30,7 @@ struct EmbeddingConfig {
                   int64 block_num = 1, int slot_num = 0,
                   const std::string& name = "", int64 steps_to_live = 0,
                   int64 filter_freq = 0, int64 max_freq = 999999,
-                  float l2_weight_threshold = -1.0, const std::string& layout = "normal",
+                  float l2_weight_threshold = -1.0, const std::string& layout = "normal_fix",
                   int64 max_element_size = 0, float false_positive_probability = -1.0,
                   DataType counter_type = DT_UINT64, embedding::StorageType storage_type = embedding::DRAM,
                   const std::string& storage_path = "", int64 storage_size = 0,
