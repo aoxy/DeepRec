@@ -168,7 +168,7 @@ class EmbeddingVar : public ResourceBase {
 
   void BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
     Status s = storage_manager_->BatchCommit(keys, value_ptrs);
-  } 
+  }
 
   int64 GetVersion(K key) {
     ValuePtr<V>* value_ptr = nullptr;
@@ -183,6 +183,11 @@ class EmbeddingVar : public ResourceBase {
   void LookupOrCreate(K key, V* val, V* default_v)  {
     const V* default_value_ptr = (default_v == nullptr) ? default_value_ : default_v;
     filter_->LookupOrCreate(key, val, default_value_ptr);
+  }
+
+  void LookupOrCreateWithFreq(K key, V* val, V* default_v)  {
+    const V* default_value_ptr = (default_v == nullptr) ? default_value_ : default_v;
+    filter_->LookupOrCreateWithFreq(key, val, default_value_ptr);
   }
 
   void LookupOrCreate(K key, V* val, V* default_v, int64 count)  {
@@ -228,6 +233,10 @@ class EmbeddingVar : public ResourceBase {
 
   float GetL2WeightThreshold() {
     return emb_config_.l2_weight_threshold;
+  }
+
+  bool IsMultiLevel() {
+    return emb_config_.is_multi_level;
   }
 
   std::string DebugString() const {
@@ -280,20 +289,20 @@ class EmbeddingVar : public ResourceBase {
     storage_manager_->GetSnapshot(&key_list_tmp, &value_ptr_list);
     for (int64 i = 0; i < key_list_tmp.size(); ++i) {
       V* val = value_ptr_list[i]->GetValue(emb_config_.emb_index, value_len_, storage_manager_->GetOffset(emb_config_.emb_index));
-      V* primary_val = value_ptr_list[i]->GetValue(emb_config_.primary_emb_index, value_len_, storage_manager_->GetOffset(emb_config_.emb_index));
+      V* primary_val = value_ptr_list[i]->GetValue(emb_config_.primary_emb_index, value_len_, storage_manager_->GetOffset(emb_config_.primary_emb_index));
       if (val != nullptr && primary_val != nullptr) {
         value_list->push_back(val);
         key_list->push_back(key_list_tmp[i]);
-        if (emb_config_.filter_freq != 0) {
+        if (emb_config_.filter_freq != 0 || emb_config_.is_multi_level) {
           int64 dump_freq = filter_->GetFreq(key_list_tmp[i], value_ptr_list[i]);
-          freq_list->push_back(dump_freq); 
+          freq_list->push_back(dump_freq);
         }
         if (emb_config_.steps_to_live != 0) {
           int64 dump_version = value_ptr_list[i]->GetStep();
           version_list->push_back(dump_version);
         }
       }
-      storage_manager_->FreeValuePtr(value_ptr_list[i]);
+      // storage_manager_->FreeValuePtr(value_ptr_list[i]);
     }
     return key_list->size();
   }
@@ -371,7 +380,7 @@ class EmbeddingVar : public ResourceBase {
     }
     return Status::OK();
   }
-  
+
   V* GetDefaultValuePtr() {
     return default_value_;
   }
