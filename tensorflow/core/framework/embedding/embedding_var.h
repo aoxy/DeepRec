@@ -130,7 +130,7 @@ class EmbeddingVar : public ResourceBase {
     alloc_ = ev_allocator();
 
     if (storage_manager_ == nullptr) {
-      return errors::InvalidArgument("Invalid ht_type to construct EmbeddingVar");
+      return errors::InvalidArgument("Invalid storage_manager_ to construct EmbeddingVar");
     } else {
       emb_config_.default_value_dim = default_value_dim;
       value_len_ = default_tensor.NumElements()/emb_config_.default_value_dim;
