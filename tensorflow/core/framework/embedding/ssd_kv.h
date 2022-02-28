@@ -67,8 +67,21 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   Status Insert(K key, const ValuePtr<V>* value_ptr) {
-    counter_->add(key, 1);
-    return Status::OK();
+    int64 l_id = std::abs(key)%partition_num_;
+    spin_rd_lock l(hash_map_[l_id].mu);
+    auto iter = hash_map_[l_id].hash_map.find(key);
+    if (iter == hash_map_[l_id].hash_map.end()) {
+      hash_map_[l_id].fs.seekp(0, std::ios::end);
+      int64 offset = hash_map_[l_id].fs.tellp();
+      hash_map_[l_id].hash_map[key] = offset;
+      hash_map_[l_id].fs.write((char*)value_ptr->GetPtr(), val_len);
+      counter_->add(key, 1);
+      app_counter_->add(key, 1);
+      return Status::OK();
+    } else {
+      return errors::AlreadyExists(
+          "already exists Key: ", key, " in SSDKV.");
+    }
   }
 
   Status BatchInsert(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
@@ -76,17 +89,8 @@ class SSDKV : public KVInterface<K, V> {
   } 
 
   Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
-    int64 l_id;
-    int64 offset;
     for (int i = 0; i < keys.size(); i++) {
-      app_counter_->add(keys[i], 1);
-      l_id = std::abs(keys[i])%partition_num_;
-      spin_rd_lock l(hash_map_[l_id].mu);
-      hash_map_[l_id].fs.seekp(0, std::ios::end);
-      offset = hash_map_[l_id].fs.tellp();
-      hash_map_[l_id].hash_map[keys[i]] = offset; // Update offset.
-      hash_map_[l_id].fs.write((char*)value_ptrs[i]->GetPtr(), val_len);
-      delete value_ptrs[i];
+      Commit(keys[i], value_ptrs[i]);
     }
     return Status::OK();
   }
@@ -104,7 +108,15 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   Status Remove(K key) {
-    return Status::OK();
+    counter_->sub(key, 1);
+    int64 l_id = std::abs(key)%partition_num_;
+    spin_wr_lock l(hash_map_[l_id].mu);
+    if (hash_map_[l_id].hash_map.erase(key)) {
+      return Status::OK();
+    } else {
+      return errors::NotFound(
+          "Unable to find Key: ", key, " in SSDKV.");
+    }
   }
 
   Status GetSnapshot(std::vector<K>* key_list, std::vector<ValuePtr<V>* >* value_ptr_list) {

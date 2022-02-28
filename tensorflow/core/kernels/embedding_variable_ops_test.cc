@@ -1109,5 +1109,123 @@ TEST(EmbeddingVariableTest, TestSizeDBKV) {
   LOG(INFO) << "2 size:" << hashmap->Size();
 }
 
+TEST(EmbeddingVariableTest, TestSSDLarge) {
+
+  int64 value_size = 128;
+  Tensor value(DT_FLOAT, TensorShape({value_size}));
+  test::FillValues<float>(&value, std::vector<float>(value_size, 9.0));
+  float* fill_v = (float*)malloc(value_size * sizeof(float));
+  auto storage_manager = new embedding::StorageManager<int64, float>(
+                 "EmbeddingVar", embedding::StorageConfig(embedding::SSD, "/tmp/ssd_ut2"));
+  TF_CHECK_OK(storage_manager->Init());
+  EmbeddingVar<int64, float>* variable
+    = new EmbeddingVar<int64, float>("EmbeddingVar",
+        storage_manager,
+          EmbeddingConfig(/*emb_index = */0, /*primary_emb_index = */0,
+                          /*block_num = */1, /*slot_num = */0,
+                          /*name = */"", /*steps_to_live = */0,
+                          /*filter_freq = */0, /*max_freq = */999999,
+                          /*l2_weight_threshold = */-1.0, /*layout = */"normal_fix",
+                          /*max_element_size = */0, /*false_positive_probability = */-1.0,
+                          /*counter_type = */DT_UINT64, /*storage_type = */embedding::SSD));
+  variable->Init(value, 1);
+
+  Tensor part_offset_tensor(DT_INT32,  TensorShape({kSavedPartitionNum + 1}));
+
+  int64 ev_size = 1004800;
+  for (int64 i = 0; i < ev_size; i++) {
+    ValuePtr<float>* value_ptr = nullptr;
+    variable->LookupOrCreateKey(i, &value_ptr);
+    typename TTypes<float>::Flat vflat = variable->flat(value_ptr);
+  }
+
+  LOG(INFO) << "size:" << variable->Size();
+
+  /*
+  BundleWriter writer(Env::Default(), Prefix("foo"));
+  DumpEmbeddingValues(variable, "var/part_0", &writer, &part_offset_tensor);
+  TF_ASSERT_OK(writer.Finish());
+
+  {
+    BundleReader reader(Env::Default(), Prefix("foo"));
+    TF_ASSERT_OK(reader.status());
+    EXPECT_EQ(
+        AllTensorKeys(&reader),
+        std::vector<string>({"var/part_0-freqs", "var/part_0-keys", "var/part_0-partition_offset",
+                             "var/part_0-values", "var/part_0-versions" }));
+    {
+      string key = "var/part_0-keys";
+      EXPECT_TRUE(reader.Contains(key));
+      // Tests for LookupDtypeAndShape().
+      DataType dtype;
+      TensorShape shape;
+      TF_ASSERT_OK(reader.LookupDtypeAndShape(key, &dtype, &shape));
+      // Tests for Lookup(), checking tensor contents.
+      Tensor val(dtype, TensorShape{ev_size});
+      TF_ASSERT_OK(reader.Lookup(key, &val));
+      LOG(INFO) << "read keys:" << val.DebugString();
+    }
+    {
+      string key = "var/part_0-values";
+      EXPECT_TRUE(reader.Contains(key));
+      // Tests for LookupDtypeAndShape().
+      DataType dtype;
+      TensorShape shape;
+      TF_ASSERT_OK(reader.LookupDtypeAndShape(key, &dtype, &shape));
+      // Tests for Lookup(), checking tensor contents.
+      Tensor val(dtype, TensorShape{ev_size, value_size});
+      LOG(INFO) << "read values:" << val.DebugString();
+      TF_ASSERT_OK(reader.Lookup(key, &val));
+      LOG(INFO) << "read values:" << val.DebugString();
+    }
+    {
+      string key = "var/part_0-versions";
+      EXPECT_TRUE(reader.Contains(key));
+      // Tests for LookupDtypeAndShape().
+      DataType dtype;
+      TensorShape shape;
+      TF_ASSERT_OK(reader.LookupDtypeAndShape(key, &dtype, &shape));
+      // Tests for Lookup(), checking tensor contents.
+      Tensor val(dtype, TensorShape{ev_size});
+      TF_ASSERT_OK(reader.Lookup(key, &val));
+      LOG(INFO) << "read versions:" << val.DebugString();
+    }  
+  }
+  */
+}
+
+TEST(EmbeddingVariableTest, TestLEVELDBLarge) {
+
+  int64 value_size = 128;
+  Tensor value(DT_FLOAT, TensorShape({value_size}));
+  test::FillValues<float>(&value, std::vector<float>(value_size, 9.0));
+  float* fill_v = (float*)malloc(value_size * sizeof(float));
+  auto storage_manager = new embedding::StorageManager<int64, float>(
+                 "EmbeddingVar", embedding::StorageConfig(embedding::LEVELDB, "/tmp/db_ut2"));
+  TF_CHECK_OK(storage_manager->Init());
+  EmbeddingVar<int64, float>* variable
+    = new EmbeddingVar<int64, float>("EmbeddingVar",
+        storage_manager,
+          EmbeddingConfig(/*emb_index = */0, /*primary_emb_index = */0,
+                          /*block_num = */1, /*slot_num = */0,
+                          /*name = */"", /*steps_to_live = */0,
+                          /*filter_freq = */0, /*max_freq = */999999,
+                          /*l2_weight_threshold = */-1.0, /*layout = */"normal_fix",
+                          /*max_element_size = */0, /*false_positive_probability = */-1.0,
+                          /*counter_type = */DT_UINT64, /*storage_type = */embedding::LEVELDB));
+  variable->Init(value, 1);
+
+  Tensor part_offset_tensor(DT_INT32,  TensorShape({kSavedPartitionNum + 1}));
+
+  int64 ev_size = 1004800;
+  for (int64 i = 0; i < ev_size; i++) {
+    ValuePtr<float>* value_ptr = nullptr;
+    variable->LookupOrCreateKey(i, &value_ptr);
+    typename TTypes<float>::Flat vflat = variable->flat(value_ptr);
+  }
+
+  LOG(INFO) << "size:" << variable->Size();
+}
+
 } // namespace
 } // namespace tensorflow
