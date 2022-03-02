@@ -68,7 +68,7 @@ class SSDKV : public KVInterface<K, V> {
 
   Status Insert(K key, const ValuePtr<V>* value_ptr) {
     int64 l_id = std::abs(key)%partition_num_;
-    spin_rd_lock l(hash_map_[l_id].mu);
+    spin_wr_lock l(hash_map_[l_id].mu);
     auto iter = hash_map_[l_id].hash_map.find(key);
     if (iter == hash_map_[l_id].hash_map.end()) {
       hash_map_[l_id].fs.seekp(0, std::ios::end);
@@ -98,7 +98,7 @@ class SSDKV : public KVInterface<K, V> {
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
     app_counter_->add(key, 1);
     int64 l_id = std::abs(key)%partition_num_;
-    spin_rd_lock l(hash_map_[l_id].mu);
+    spin_wr_lock l(hash_map_[l_id].mu);
     hash_map_[l_id].fs.seekp(0, std::ios::end);
     int64 offset = hash_map_[l_id].fs.tellp();
     hash_map_[l_id].hash_map[key] = offset; // Update offset.
