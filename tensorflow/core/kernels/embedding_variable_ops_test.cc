@@ -1269,16 +1269,29 @@ public:
     size_t size() { return ids.size(); }
 };
 
-void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
+void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, int batch_size) {
   std::vector<ValuePtr<float>*> value_ptrs;
-  for (int64 i = 0; i< keys.size(); ++i) {
+  for (int64 i = 0; i < keys.size(); ++i) {
     ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(128);
     value_ptrs.push_back(tmp);
   }
-  LOG(INFO) << "value_ptrs.size(): " << value_ptrs.size() << std::endl;
+  // LOG(INFO) << "value_ptrs.size(): " << value_ptrs.size() << std::endl;
+  // LOG(INFO) << "size[]size: " << keys.size()<<"[]"<<value_ptrs.size() << std::endl;
+  // LOG(INFO) << "batch size: " << batch_size << std::endl;
   ASSERT_EQ(keys.size(), value_ptrs.size());
-  uint64 start = Env::Default()->NowNanos();// TODO:
-  hashmap->BatchCommit(keys, value_ptrs);
+  uint64 start = Env::Default()->NowNanos();
+  
+  for (int64 i = 0; i < keys.size();) {
+    std::vector<int64> batch_keys;
+    std::vector<ValuePtr<float>*> batch_value_ptrs;
+    for(int j = 0; j < batch_size && i < keys.size(); ++j,++i){
+      batch_keys.push_back(keys[i]);
+      batch_value_ptrs.push_back(value_ptrs[i]);
+    }
+    // LOG(INFO) << "size[batch]size: " << batch_keys.size()<<"[]"<<batch_value_ptrs.size() << std::endl;
+    hashmap->BatchCommit(batch_keys, batch_value_ptrs);
+  }
+  // hashmap->BatchCommit(keys, value_ptrs);
   uint64 end = Env::Default()->NowNanos();
   uint64 result_cost = end - start;
   LOG(INFO) << "BatchCommit time: " << result_cost << "ns" << std::endl;
@@ -1291,7 +1304,7 @@ void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
     value_ptrs.push_back(tmp);
   }
   ASSERT_EQ(keys.size(), value_ptrs.size());
-  uint64 start = Env::Default()->NowNanos();// TODO:
+  uint64 start = Env::Default()->NowNanos();
   for (int64 i = 0; i< keys.size(); ++i) {
     TF_CHECK_OK(hashmap->Lookup(keys[i], &value_ptrs[i]));
   }
@@ -1303,29 +1316,31 @@ void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
 TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
   KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
   ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv");
-  LOG(INFO) << "LEVELD hashmap size1: " << hashmap->Size();
-  LOG(INFO) << "dl.ids size1: " << dl.ids.size();
-  auto t1 = std::thread(BatchCommit, hashmap, dl.ids);
+  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, 100000);
+  // LOG(INFO) << "LEVELD hashmap size1: " << hashmap->Size();
+  // LOG(INFO) << "dl.ids size1: " << dl.ids.size();
+  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, 200);
   t1.join();
-  LOG(INFO) << "LEVELD hashmap size2: " << hashmap->Size();
+  // LOG(INFO) << "LEVELD hashmap size2: " << hashmap->Size();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
   t2.join();
-  LOG(INFO) << "LEVELD hashmap size3: " << hashmap->Size();
+  // LOG(INFO) << "LEVELD hashmap size3: " << hashmap->Size();
 }
 
-TEST(KVInterfaceTest, TestLargeSSDKV) {
-  KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
-  ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv");
-  LOG(INFO) << "SSD hashmap size1: " << hashmap->Size();
-  auto t1 = std::thread(BatchCommit, hashmap, dl.ids);
-  t1.join();
-  LOG(INFO) << "SSD hashmap size2: " << hashmap->Size();
-  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
-  t2.join();
-  LOG(INFO) << "SSD hashmap size3: " << hashmap->Size();
-}
+
+
+// TEST(KVInterfaceTest, TestLargeSSDKV) {
+//   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
+//   ASSERT_EQ(hashmap->Size(), 0);
+//   DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv");
+//   LOG(INFO) << "SSD hashmap size1: " << hashmap->Size();
+//   auto t1 = std::thread(BatchCommit, hashmap, dl.ids);
+//   t1.join();
+//   LOG(INFO) << "SSD hashmap size2: " << hashmap->Size();
+//   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
+//   t2.join();
+//   LOG(INFO) << "SSD hashmap size3: " << hashmap->Size();
+// }
 
 } // namespace
 } // namespace tensorflow
