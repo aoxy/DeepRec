@@ -30,8 +30,9 @@ class SSDKV : public KVInterface<K, V> {
       hash_map_[i].hash_map.max_load_factor(0.8);
       hash_map_[i].hash_map.set_empty_key(-1);
       hash_map_[i].hash_map.set_deleted_key(-2);
-      hash_map_[i].fs = std::fstream(path_ + std::to_string(i), std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
-      CHECK(hash_map_[i].fs.good());
+      // hash_map_[i].fs.open(path_ + std::to_string(i), std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
+      fs.push_back(std::fstream(path_ + std::to_string(i), std::ios::app | std::ios::in | std::ios::out | std::ios::binary));
+      CHECK(fs[i].good());
     }
     counter_ =  new SizeCounter<K>(8);
     app_counter_ =  new SizeCounter<K>(8);
@@ -44,9 +45,11 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   ~SSDKV() {
+    LOG(INFO) << "~SSDKV()";
     for (int i = 0; i< partition_num_; i++) {
-      hash_map_[i].fs.close();
+      fs[i].close();
     }
+    delete []hash_map_;
   }
 
   Status Lookup(K key, ValuePtr<V>** value_ptr) {
@@ -59,8 +62,8 @@ class SSDKV : public KVInterface<K, V> {
     } else {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
       int64 offset = iter->second;
-      hash_map_[l_id].fs.seekg(offset, std::ios::beg);
-      hash_map_[l_id].fs.read((char*)(val->GetPtr()), val_len);
+      fs[l_id].seekg(offset, std::ios::beg);
+      fs[l_id].read((char*)(val->GetPtr()), val_len);
       *value_ptr = val;
       return Status::OK();
     }
@@ -71,10 +74,10 @@ class SSDKV : public KVInterface<K, V> {
     spin_wr_lock l(hash_map_[l_id].mu);
     auto iter = hash_map_[l_id].hash_map.find(key);
     if (iter == hash_map_[l_id].hash_map.end()) {
-      hash_map_[l_id].fs.seekp(0, std::ios::end);
-      int64 offset = hash_map_[l_id].fs.tellp();
+      fs[l_id].seekp(0, std::ios::end);
+      int64 offset = fs[l_id].tellp();
       hash_map_[l_id].hash_map[key] = offset;
-      hash_map_[l_id].fs.write((char*)value_ptr->GetPtr(), val_len);
+      fs[l_id].write((char*)value_ptr->GetPtr(), val_len);
       counter_->add(key, 1);
       app_counter_->add(key, 1);
       return Status::OK();
@@ -89,6 +92,7 @@ class SSDKV : public KVInterface<K, V> {
   } 
 
   Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
+    LOG(INFO) << "here" << keys.size();
     for (int i = 0; i < keys.size(); i++) {
       Commit(keys[i], value_ptrs[i]);
     }
@@ -99,10 +103,12 @@ class SSDKV : public KVInterface<K, V> {
     app_counter_->add(key, 1);
     int64 l_id = std::abs(key)%partition_num_;
     spin_wr_lock l(hash_map_[l_id].mu);
-    hash_map_[l_id].fs.seekp(0, std::ios::end);
-    int64 offset = hash_map_[l_id].fs.tellp();
+    fs[l_id].seekp(0, std::ios::end);
+    int64 offset = fs[l_id].tellp();
     hash_map_[l_id].hash_map[key] = offset; // Update offset.
-    hash_map_[l_id].fs.write((char*)value_ptr->GetPtr(), val_len);
+    char aa[] = "a";
+    // fs[l_id].write((char*)value_ptr->GetPtr(), val_len);
+    fs[l_id].write(aa, 1);
     delete value_ptr;
     return Status::OK();
   }
@@ -121,18 +127,20 @@ class SSDKV : public KVInterface<K, V> {
 
   Status GetSnapshot(std::vector<K>* key_list, std::vector<ValuePtr<V>* >* value_ptr_list) {
     dense_hash_map hash_map_dump[partition_num_];
+    // std::vector<std::fstream> fs_dump;
     int64 offset;
     for (int i = 0; i< partition_num_; i++) {
       spin_rd_lock l(hash_map_[i].mu);
       hash_map_dump[i].hash_map = hash_map_[i].hash_map;
+      // fs_dump.push_back(fs[i]);
     }
     for (int i = 0; i< partition_num_; i++) {
       for (const auto it : hash_map_dump[i].hash_map) {
         key_list->push_back(it.first);
         offset = it.second;
         ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
-        hash_map_dump[i].fs.seekg(offset, std::ios::beg);
-        hash_map_dump[i].fs.read((char*)(val->GetPtr()), val_len);
+        fs[i].seekg(offset, std::ios::beg);
+        fs[i].read((char*)(val->GetPtr()), val_len);
         value_ptr_list->push_back(val);
       }
     }
@@ -153,7 +161,7 @@ class SSDKV : public KVInterface<K, V> {
   }
  private:
   size_t val_len;
-  const int partition_num_ = 32;
+  const int partition_num_ = 1;
   SizeCounter<K>* counter_;
   SizeCounter<K>* app_counter_;
   std::string path_;
@@ -163,9 +171,10 @@ class SSDKV : public KVInterface<K, V> {
   struct dense_hash_map {
     mutable easy_spinrwlock_t mu = EASY_SPINRWLOCK_INITIALIZER;
     google::dense_hash_map<K, size_t> hash_map;
-    std::fstream fs;
+    // std::fstream fs;
   };
   dense_hash_map* hash_map_;
+  std::vector<std::fstream> fs;
 };
 
 } //namespace tensorflow
