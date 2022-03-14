@@ -92,7 +92,6 @@ class SSDKV : public KVInterface<K, V> {
   } 
 
   Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
-    LOG(INFO) << "here" << keys.size();
     for (int i = 0; i < keys.size(); i++) {
       Commit(keys[i], value_ptrs[i]);
     }

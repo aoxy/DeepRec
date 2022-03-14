@@ -308,6 +308,7 @@ TEST(EmbeddingVariableTest, TestEVExportSmallLockless) {
   }
 }
 
+/*
 TEST(EmbeddingVariableTest, TestEVExportLargeLockless) {
 
   int64 value_size = 128;
@@ -383,6 +384,7 @@ TEST(EmbeddingVariableTest, TestEVExportLargeLockless) {
     }
   }
 }
+*/
 
 void multi_insertion(EmbeddingVar<int64, float>* variable, int64 value_size){
   for (long j = 0; j < 5; j++) {
@@ -1275,9 +1277,6 @@ void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, in
     ValuePtr<float>* tmp= new NormalContiguousValuePtr<float>(128);
     value_ptrs.push_back(tmp);
   }
-  // LOG(INFO) << "value_ptrs.size(): " << value_ptrs.size() << std::endl;
-  // LOG(INFO) << "size[]size: " << keys.size()<<"[]"<<value_ptrs.size() << std::endl;
-  // LOG(INFO) << "batch size: " << batch_size << std::endl;
   ASSERT_EQ(keys.size(), value_ptrs.size());
   uint64 start = Env::Default()->NowNanos();
   
@@ -1288,10 +1287,8 @@ void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, in
       batch_keys.push_back(keys[i]);
       batch_value_ptrs.push_back(value_ptrs[i]);
     }
-    // LOG(INFO) << "size[batch]size: " << batch_keys.size()<<"[]"<<batch_value_ptrs.size() << std::endl;
     hashmap->BatchCommit(batch_keys, batch_value_ptrs);
   }
-  // hashmap->BatchCommit(keys, value_ptrs);
   uint64 end = Env::Default()->NowNanos();
   uint64 result_cost = end - start;
   LOG(INFO) << "BatchCommit time: " << result_cost << "ns" << std::endl;
@@ -1315,32 +1312,28 @@ void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
 
 TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
   KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
+  hashmap->SetTotalDims(128);
   ASSERT_EQ(hashmap->Size(), 0);
   DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, 100000);
-  // LOG(INFO) << "LEVELD hashmap size1: " << hashmap->Size();
-  // LOG(INFO) << "dl.ids size1: " << dl.ids.size();
-  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, 200);
+  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, 200);// 261,676,816ns
   t1.join();
-  // LOG(INFO) << "LEVELD hashmap size2: " << hashmap->Size();
-  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
+  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);// 478,955,249ns
   t2.join();
-  // LOG(INFO) << "LEVELD hashmap size3: " << hashmap->Size();
 }
 
 
 
-// TEST(KVInterfaceTest, TestLargeSSDKV) {
-//   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
-//   ASSERT_EQ(hashmap->Size(), 0);
-//   DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv");
-//   LOG(INFO) << "SSD hashmap size1: " << hashmap->Size();
-//   auto t1 = std::thread(BatchCommit, hashmap, dl.ids);
-//   t1.join();
-//   LOG(INFO) << "SSD hashmap size2: " << hashmap->Size();
-//   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
-//   t2.join();
-//   LOG(INFO) << "SSD hashmap size3: " << hashmap->Size();
-// }
+
+TEST(KVInterfaceTest, TestLargeSSDKV) {
+  KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
+  hashmap->SetTotalDims(128);
+  ASSERT_EQ(hashmap->Size(), 0);
+  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, 100000);
+  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, 200);// 217,514,704ns
+  t1.join();
+  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);// 57,460,986ns
+  t2.join();
+}
 
 } // namespace
 } // namespace tensorflow
