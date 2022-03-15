@@ -1291,7 +1291,7 @@ void BatchCommit(KVInterface<int64, float>* hashmap, std::vector<int64> keys, in
   }
   uint64 end = Env::Default()->NowNanos();
   uint64 result_cost = end - start;
-  LOG(INFO) << "BatchCommit time: " << result_cost << "ns" << std::endl;
+  LOG(INFO) << "BatchCommit time: " << result_cost << " ns";
 }
 
 void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
@@ -1307,32 +1307,59 @@ void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
   }
   uint64 end = Env::Default()->NowNanos();
   uint64 result_cost = end - start;
-  LOG(INFO) << "BatchLookup time: " << result_cost << "ns" << std::endl;
+  LOG(INFO) << "BatchLookup time: " << result_cost << " ns";
 }
 
-TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
+void LevelDBKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
   hashmap->SetTotalDims(128);
   ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, 100000);
-  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, 200);// 261,676,816ns
+  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, batch_size);
   t1.join();
-  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);// 478,955,249ns
+  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
+  t2.join();
+}
+
+TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
+  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  for (int total_size : total_size_list) {
+    for (int batch_size : batch_size_list) {
+      LOG(INFO) << "LevelDB total_size: " << total_size << ", batch_size: " << batch_size << std::endl;
+      for(int e = 0; e < 5; e++){
+        LOG(INFO) << "epoch: " << e << std::endl;
+        LevelDBKVTest(total_size, batch_size);
+      }
+    }
+  }
+}
+
+void SSDKVTest(int total_size, int batch_size){
+  KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
+  hashmap->SetTotalDims(128);
+  ASSERT_EQ(hashmap->Size(), 0);
+  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, total_size);
+  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, batch_size);
+  t1.join();
+  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
   t2.join();
 }
 
 
-
-
 TEST(KVInterfaceTest, TestLargeSSDKV) {
-  KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
-  hashmap->SetTotalDims(128);
-  ASSERT_EQ(hashmap->Size(), 0);
-  DataLoader dl("/home/code/DRAM-SSD-Storage/dataset/taobao/shuffled_sample.csv", 0, 100000);
-  auto t1 = std::thread(BatchCommit, hashmap, dl.ids, 200);// 217,514,704ns
-  t1.join();
-  auto t2 = std::thread(BatchLookup, hashmap, dl.ids);// 57,460,986ns
-  t2.join();
+  std::vector<int> total_size_list = {100000, 1000000};          // 10w, 100w
+  std::vector<int> batch_size_list = {200, 2000, 20000, 100000}; // 200, 2000, 2w, 10w
+  for (int total_size : total_size_list) {
+    for (int batch_size : batch_size_list) {
+      LOG(INFO) << "SSD total_size: " << total_size << ", batch_size: " << batch_size;
+      for(int e = 0; e < 5; e++){
+        LOG(INFO) << "epoch: " << e;
+        SSDKVTest(total_size, batch_size);
+      }
+      
+    }
+  }
 }
 
 } // namespace
