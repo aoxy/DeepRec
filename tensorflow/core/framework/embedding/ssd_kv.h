@@ -1,22 +1,19 @@
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_SSD_KV_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_SSD_KV_H_
 
-#include "tensorflow/core/lib/io/path.h"
-#include "sparsehash/dense_hash_map"
-
-#include "tensorflow/core/framework/embedding/kv_interface.h"
-#include "tensorflow/core/framework/embedding/value_ptr.h"
-#include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/framework/embedding/leveldb_kv.h"
-
+#include <fstream>
 #include <sstream>
 #include <vector>
-#include <fstream>
 
-
+#include "sparsehash/dense_hash_map"
+#include "tensorflow/core/framework/embedding/kv_interface.h"
+#include "tensorflow/core/framework/embedding/leveldb_kv.h"
+#include "tensorflow/core/framework/embedding/value_ptr.h"
+#include "tensorflow/core/lib/core/status.h"
+#include "tensorflow/core/lib/io/path.h"
 
 namespace tensorflow {
-  
+
 template <class V>
 class ValuePtr;
 
@@ -24,19 +21,22 @@ template <class K, class V>
 class SSDKV : public KVInterface<K, V> {
  public:
   SSDKV(std::string path) {
-    path_ = io::JoinPath(path, "ssd_kv_" + std::to_string(Env::Default()->NowMicros()) + "_");
-    hash_map_ = new dense_hash_map[partition_num_];
-    for (int i = 0; i< partition_num_; i++) {
-      hash_map_[i].hash_map.max_load_factor(0.8);
-      hash_map_[i].hash_map.set_empty_key(-1);
-      hash_map_[i].hash_map.set_deleted_key(-2);
-      // hash_map_[i].fs.open(path_ + std::to_string(i), std::ios::app | std::ios::in | std::ios::out | std::ios::binary);
-      fs.push_back(std::fstream(path_ + std::to_string(i), std::ios::app | std::ios::in | std::ios::out | std::ios::binary));
-      CHECK(fs[i].good());
-    }
-    counter_ =  new SizeCounter<K>(8);
-    app_counter_ =  new SizeCounter<K>(8);
-    new_value_ptr_fn_ = [] (size_t size) { return new NormalContiguousValuePtr<V>(size); };
+    path_ = io::JoinPath(
+        path, "ssd_kv_" + std::to_string(Env::Default()->NowMicros()) + "_");
+    hash_map.max_load_factor(0.8);
+    hash_map.set_empty_key(-1);
+    hash_map.set_deleted_key(-2);
+    current_version = 0;
+    fs.push_back(std::fstream(
+        path_ + std::to_string(current_version),
+        std::ios::app | std::ios::in | std::ios::out | std::ios::binary));
+    CHECK(fs[current_version].good());
+
+    counter_ = new SizeCounter<K>(8);
+    app_counter_ = new SizeCounter<K>(8);
+    new_value_ptr_fn_ = [](size_t size) {
+      return new NormalContiguousValuePtr<V>(size);
+    };
   }
 
   void SetTotalDims(int total_dims) {
@@ -45,53 +45,47 @@ class SSDKV : public KVInterface<K, V> {
   }
 
   ~SSDKV() {
-    LOG(INFO) << "~SSDKV()";
-    for (int i = 0; i< partition_num_; i++) {
+    for (int i = 0; i < fs.size(); i++) {
       fs[i].close();
     }
-    delete []hash_map_;
   }
 
   Status Lookup(K key, ValuePtr<V>** value_ptr) {
-    int64 l_id = std::abs(key)%partition_num_;
-    spin_rd_lock l(hash_map_[l_id].mu);
-    auto iter = hash_map_[l_id].hash_map.find(key);
-    if (iter == hash_map_[l_id].hash_map.end()) {
-      return errors::NotFound(
-          "Unable to find Key: ", key, " in SSDKV.");
+    auto iter = hash_map.find(key);
+    if (iter == hash_map.end()) {
+      return errors::NotFound("Unable to find Key: ", key, " in SSDKV.");
     } else {
       ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
-      int64 offset = iter->second;
-      fs[l_id].seekg(offset, std::ios::beg);
-      fs[l_id].read((char*)(val->GetPtr()), val_len);
+      OffsetVersion posi = iter->second;
+      fs[posi.version].seekg(posi.offset, std::ios::beg);
+      fs[posi.version].read((char*)(val->GetPtr()), val_len);
       *value_ptr = val;
       return Status::OK();
     }
   }
 
   Status Insert(K key, const ValuePtr<V>* value_ptr) {
-    int64 l_id = std::abs(key)%partition_num_;
-    spin_wr_lock l(hash_map_[l_id].mu);
-    auto iter = hash_map_[l_id].hash_map.find(key);
-    if (iter == hash_map_[l_id].hash_map.end()) {
-      fs[l_id].seekp(0, std::ios::end);
-      int64 offset = fs[l_id].tellp();
-      hash_map_[l_id].hash_map[key] = offset;
-      fs[l_id].write((char*)value_ptr->GetPtr(), val_len);
+    auto iter = hash_map.find(key);
+    if (iter == hash_map.end()) {
+      fs[current_version].seekp(0, std::ios::end);
+      size_t offset = fs[current_version].tellp();
+      hash_map[key] = OffsetVersion(offset, current_version);;
+      fs[current_version].write((char*)value_ptr->GetPtr(), val_len);
       counter_->add(key, 1);
       app_counter_->add(key, 1);
       return Status::OK();
     } else {
-      return errors::AlreadyExists(
-          "already exists Key: ", key, " in SSDKV.");
+      return errors::AlreadyExists("already exists Key: ", key, " in SSDKV.");
     }
   }
 
-  Status BatchInsert(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
+  Status BatchInsert(std::vector<K> keys,
+                     std::vector<ValuePtr<V>*> value_ptrs) {
     return BatchCommit(keys, value_ptrs);
-  } 
+  }
 
-  Status BatchCommit(std::vector<K> keys, std::vector<ValuePtr<V>*> value_ptrs) {
+  Status BatchCommit(std::vector<K> keys,
+                     std::vector<ValuePtr<V>*> value_ptrs) {
     for (int i = 0; i < keys.size(); i++) {
       Commit(keys[i], value_ptrs[i]);
     }
@@ -100,80 +94,67 @@ class SSDKV : public KVInterface<K, V> {
 
   Status Commit(K key, const ValuePtr<V>* value_ptr) {
     app_counter_->add(key, 1);
-    int64 l_id = std::abs(key)%partition_num_;
-    spin_wr_lock l(hash_map_[l_id].mu);
-    fs[l_id].seekp(0, std::ios::end);
-    int64 offset = fs[l_id].tellp();
-    hash_map_[l_id].hash_map[key] = offset; // Update offset.
-    fs[l_id].write((char*)value_ptr->GetPtr(), val_len);
+    fs[current_version].seekp(0, std::ios::end);
+    size_t offset = fs[current_version].tellp();
+    hash_map[key] = OffsetVersion(offset, current_version);  // Update offset.
+    fs[current_version].write((char*)value_ptr->GetPtr(), val_len);
     delete value_ptr;
     return Status::OK();
   }
 
   Status Remove(K key) {
     counter_->sub(key, 1);
-    int64 l_id = std::abs(key)%partition_num_;
-    spin_wr_lock l(hash_map_[l_id].mu);
-    if (hash_map_[l_id].hash_map.erase(key)) {
+    if (hash_map.erase(key)) {
       return Status::OK();
     } else {
-      return errors::NotFound(
-          "Unable to find Key: ", key, " in SSDKV.");
+      return errors::NotFound("Unable to find Key: ", key, " in SSDKV.");
     }
   }
 
-  Status GetSnapshot(std::vector<K>* key_list, std::vector<ValuePtr<V>* >* value_ptr_list) {
-    dense_hash_map hash_map_dump[partition_num_];
-    // std::vector<std::fstream> fs_dump;
-    int64 offset;
-    for (int i = 0; i< partition_num_; i++) {
-      spin_rd_lock l(hash_map_[i].mu);
-      hash_map_dump[i].hash_map = hash_map_[i].hash_map;
-      // fs_dump.push_back(fs[i]);
-    }
-    for (int i = 0; i< partition_num_; i++) {
-      for (const auto it : hash_map_dump[i].hash_map) {
-        key_list->push_back(it.first);
-        offset = it.second;
-        ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
-        fs[i].seekg(offset, std::ios::beg);
-        fs[i].read((char*)(val->GetPtr()), val_len);
-        value_ptr_list->push_back(val);
-      }
+  Status GetSnapshot(std::vector<K>* key_list,
+                     std::vector<ValuePtr<V>*>* value_ptr_list) {
+    spin_rd_lock l(mu);
+    for (const auto it : hash_map) {
+      key_list->push_back(it.first);
+      OffsetVersion posi = it.second;
+      ValuePtr<V>* val = new_value_ptr_fn_(total_dims_);
+      fs[posi.version].seekg(posi.offset, std::ios::beg);
+      fs[posi.version].read((char*)(val->GetPtr()), val_len);
+      value_ptr_list->push_back(val);
     }
     return Status::OK();
   }
 
-  int64 Size() const {
-    return counter_->size();
-  }
+  int64 Size() const { return counter_->size(); }
 
-  void FreeValuePtr(ValuePtr<V>* value_ptr) {
-    delete value_ptr;
-  }
+  void FreeValuePtr(ValuePtr<V>* value_ptr) { delete value_ptr; }
 
   std::string DebugString() const {
     return strings::StrCat("counter_->size(): ", counter_->size(),
                            "app_counter_->size(): ", app_counter_->size());
   }
+
  private:
   size_t val_len;
-  const int partition_num_ = 1;
   SizeCounter<K>* counter_;
   SizeCounter<K>* app_counter_;
   std::string path_;
   std::function<ValuePtr<V>*(size_t)> new_value_ptr_fn_;
   int total_dims_;
 
-  struct dense_hash_map {
-    mutable easy_spinrwlock_t mu = EASY_SPINRWLOCK_INITIALIZER;
-    google::dense_hash_map<K, size_t> hash_map;
-    // std::fstream fs;
+  mutable easy_spinrwlock_t mu = EASY_SPINRWLOCK_INITIALIZER;
+  class OffsetVersion {
+   public:
+    size_t offset;   // 在文件中的偏移
+    size_t version;  // 存储在哪个文件中
+    OffsetVersion(size_t o, size_t v) : offset(o), version(v) {}
+    OffsetVersion() : offset(-1), version(-1) {}
   };
-  dense_hash_map* hash_map_;
+  google::dense_hash_map<K, OffsetVersion> hash_map;
   std::vector<std::fstream> fs;
+  size_t current_version;
 };
 
-} //namespace tensorflow
+}  // namespace tensorflow
 
-#endif  TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_SSD_KV_H_
+#endif TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_SSD_KV_H_
