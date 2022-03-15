@@ -27,6 +27,9 @@ class SSDKV : public KVInterface<K, V> {
     hash_map.set_empty_key(-1);
     hash_map.set_deleted_key(-2);
     current_version = 0;
+    buffer_size = 4 * 1024; // Write 4KB at once.
+    write_buffer = new char[buffer_size];
+    curr_buffer_off = 0;
     fs.push_back(std::fstream(
         path_ + std::to_string(current_version),
         std::ios::app | std::ios::in | std::ios::out | std::ios::binary));
@@ -48,6 +51,7 @@ class SSDKV : public KVInterface<K, V> {
     for (int i = 0; i < fs.size(); i++) {
       fs[i].close();
     }
+    delete[] write_buffer;
   }
 
   Status Lookup(K key, ValuePtr<V>** value_ptr) {
@@ -86,8 +90,22 @@ class SSDKV : public KVInterface<K, V> {
 
   Status BatchCommit(std::vector<K> keys,
                      std::vector<ValuePtr<V>*> value_ptrs) {
+    fs[current_version].seekp(0, std::ios::end);// seek to end
+    size_t offset = fs[current_version].tellp();// first offset
     for (int i = 0; i < keys.size(); i++) {
-      Commit(keys[i], value_ptrs[i]);
+      app_counter_->add(keys[i], 1);
+      hash_map[keys[i]] = OffsetVersion(offset + val_len * i, current_version);
+      if(curr_buffer_off + val_len >= buffer_size){
+        fs[current_version].write(write_buffer, curr_buffer_off);
+        // LOG(INFO) << "write: " << curr_buffer_off << std::endl;
+        curr_buffer_off = 0;
+      }
+      memcpy(write_buffer + curr_buffer_off, (char*)value_ptrs[i]->GetPtr(), val_len);
+      curr_buffer_off += val_len;
+    }
+    if(curr_buffer_off > 0){
+      fs[current_version].write(write_buffer, curr_buffer_off);
+      curr_buffer_off = 0;
     }
     return Status::OK();
   }
@@ -136,6 +154,9 @@ class SSDKV : public KVInterface<K, V> {
 
  private:
   size_t val_len;
+  char *write_buffer;
+  size_t buffer_size;
+  size_t curr_buffer_off;
   SizeCounter<K>* counter_;
   SizeCounter<K>* app_counter_;
   std::string path_;
