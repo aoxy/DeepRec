@@ -105,9 +105,7 @@ class SSDKV : public KVInterface<K, V> {
     fs[l_id].seekp(0, std::ios::end);
     int64 offset = fs[l_id].tellp();
     hash_map_[l_id].hash_map[key] = offset; // Update offset.
-    char aa[] = "a";
-    // fs[l_id].write((char*)value_ptr->GetPtr(), val_len);
-    fs[l_id].write(aa, 1);
+    fs[l_id].write((char*)value_ptr->GetPtr(), val_len);
     delete value_ptr;
     return Status::OK();
   }

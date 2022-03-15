@@ -1503,7 +1503,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
 
   def testEmbeddingVariableForLEVELDBWithAdam(self):
     print("testEmbeddingVariableForLEVELDBWithAdam")
-    os.system("rm -rf /tmp/db_ut1")
+    os.system("rm -rf /tmp/db_ut111")
     def runTestAdagrad(self, var, g):
       emb = embedding_ops.embedding_lookup(var, math_ops.cast([1, 1, 1, 2, 2, 3], dtypes.int64))
       fun = math_ops.multiply(emb, 2.0, name='multiply')
@@ -1531,14 +1531,15 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
             partitioner=partitioned_variables.fixed_size_partitioner(num_shards=1),
             steps_to_live=5,
             ev_option = variables.EmbeddingVariableOption(storage_option=variables.StorageOption(storage_type=config_pb2.StorageType.LEVELDB,
-                                                                                                 storage_path="/tmp/db_ut1")))
-      var = variable_scope.get_variable("var_2", shape=[100, 3], initializer=init_ops.ones_initializer(dtypes.float32))
+                                                                                                 storage_path="/tmp/db_ut111")))
       emb1 = runTestAdagrad(self, emb_var, g)
+    with ops.device('/cpu:0'), ops.Graph().as_default() as g:
+      var = variable_scope.get_variable("var_2", shape=[100, 3], initializer=init_ops.ones_initializer(dtypes.float32))
       emb2 = runTestAdagrad(self, var, g)
 
-      for i in range(0, 6):
-        for j in range(0, 3):
-          self.assertEqual(emb1.tolist()[i][j], emb2.tolist()[i][j])
+    for i in range(0, 6):
+      for j in range(0, 3):
+        self.assertEqual(emb1.tolist()[i][j], emb2.tolist()[i][j])
 
   def testEmbeddingVariableForLEVELDBWithAdamAsync(self):
     print("testEmbeddingVariableForLEVELDBWithAdamAsync")
