@@ -127,6 +127,7 @@ load(
     "tf_additional_numa_deps",
     "tf_additional_numa_lib_defines",
     "tf_additional_star_lib_defines",
+    "tf_additional_pmem_lib_defines",
     "tf_additional_test_deps",
     "tf_additional_verbs_lib_defines",
     "tf_grpc_service_all",
@@ -1014,7 +1015,11 @@ cc_library(
         "framework/type_traits.h",
     ] + select({
         "//tensorflow:with_pmem_support": [
-            "framework/pmem_allocator.cc"
+            "framework/pmem_allocator.cc",
+            "framework/experimental_pmem_allocator.cc",
+            "framework/experimental_pmem_allocator_utils.cc",
+            "framework/experimental_pmem_allocator.h",
+            "framework/experimental_pmem_allocator_utils.h",
         ],
         "//conditions:default": [],
     }),
@@ -1027,7 +1032,8 @@ cc_library(
     linkopts = select({
         "//tensorflow:with_pmem_support": [
             "-L/usr/local/lib",
-            "-lmemkind"
+            "-lmemkind",
+            "-lpmem",
         ],
         "//conditions:default": [],
     }),
@@ -2495,7 +2501,8 @@ LIB_INTERNAL_DEFINES = (
     tf_additional_mpi_lib_defines() +
     tf_additional_gdr_lib_defines() +
     tf_additional_numa_lib_defines() +
-    tf_additional_star_lib_defines()
+    tf_additional_star_lib_defines() +
+    tf_additional_pmem_lib_defines()
 )
 
 cc_library(
@@ -2958,6 +2965,8 @@ tf_cuda_library(
             "framework/allocator.cc",
             "framework/cpu_allocator_impl.cc",
             "framework/pmem_allocator.cc",
+            "framework/experimental_pmem_allocator.*",
+            "framework/experimental_pmem_allocator_utils.*",
             "framework/allocator_registry.cc",
             "framework/tracking_allocator.cc",
             "example/example_parser_configuration.*",
@@ -4248,6 +4257,33 @@ tf_cc_test(
         ":test",
         ":test_main",
         ":testlib",
+    ],
+)
+
+tf_cc_test(
+    name = "ev_allocator_tests",
+    srcs = [
+        "framework/ev_allocator_test.cc",
+    ],
+    deps = [
+        ":core",
+        ":core_cpu",
+        ":core_cpu_internal",
+        ":direct_session_internal",
+        ":framework",
+        ":framework_internal",
+        ":lib",
+        ":lib_internal",
+        ":ops",
+        ":protos_all_cc",
+        ":protos_test_cc",
+        ":test",
+        ":test_main",
+        ":testlib",
+        "//third_party/eigen3",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
     ],
 )
 

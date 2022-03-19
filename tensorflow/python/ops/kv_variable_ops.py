@@ -23,6 +23,7 @@ import json
 
 from tensorflow.core.framework import attr_value_pb2
 from tensorflow.core.framework import variable_pb2
+from tensorflow.core.framework.embedding import config_pb2
 from tensorflow.python.eager import context
 from tensorflow.python.eager import tape
 from tensorflow.python.framework import dtypes
@@ -261,6 +262,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._ht_type = evconfig.ht_type
     self._ht_partition_num = ht_partition_num
     self._is_sparse=False
+    self.importer=None
     if evconfig.filter_strategy != None:
       if isinstance(evconfig.filter_strategy, variables.CounterFilter):
         self._filter_freq = evconfig.filter_strategy.filter_freq
@@ -277,21 +279,35 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
       self._max_element_size = 0
       self._false_positive_probability = -1.0
       self._counter_type = dtypes.uint64
+
+    multi_level_list = [config_pb2.StorageType.LEVELDB, config_pb2.StorageType.SSD,
+                        config_pb2.StorageType.DRAM_PMEM, config_pb2.StorageType.DRAM_LEVELDB,
+                        config_pb2.StorageType.DRAM_SSD, config_pb2.StorageType.HBM_DRAM,
+                        config_pb2.StorageType.DRAM_PMEM_SSD, config_pb2.StorageType.HBM_DRAM_SSD]
       
     self._l2_weight_threshold = evconfig.l2_weight_threshold
     self._storage_type = evconfig.storage_type
     self._storage_path = evconfig.storage_path
+    self._storage_size = evconfig.storage_size
     self._default_value_dim = evconfig.default_value_dim
-    if self._steps_to_live is 0 and self._filter_freq is 0 and self._l2_weight_threshold == -1.0:
-      self._layout = "light"
+    if (isinstance(evconfig.filter_strategy, variables.CounterFilter)  and self._filter_freq != 0) or \
+       self._steps_to_live not in [0, None] or \
+       self._storage_type in multi_level_list:
+      if self._block_num not in [1, None] and self._storage_type in multi_level_list:
+        raise ValueError("Dynamic-dimension Embedding and Multi-level EV can't be enabled together") 
+      if self._block_num not in [1, None] or \
+          (self._filter_freq != 0 and self._storage_type not in multi_level_list):
+        self._layout = "normal"
+      else:
+        self._layout = "normal_contiguous"
     else:
-      self._layout = "normal"
-    self._layout = "normal_fix"
+      self._layout = "light"
+
     if self._primary is None:
       self._is_primary = True
     else:
       self._is_primary = False
-
+    
     with ops.control_dependencies(None):
       with ops.name_scope(name, "Variable", []
                           if init_from_fn else [initial_value]) as name:
@@ -392,6 +408,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                     layout = self._layout,
                     storage_type = self._storage_type,
                     storage_path = self._storage_path,
+                    storage_size = self._storage_size,
                     default_value_dim = self._default_value_dim,
                     name=n))
         self._graph_element = self._handle
@@ -450,6 +467,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._graph_element = self._handle
     self._constraint = None
     self._is_sparse=False
+    self._layout = self._initializer_op.get_attr("layout")
   # LINT.ThenChange(//tensorflow/python/eager/graph_callable.py)
 
   def set_init_data_source_initializer(self, init_data_source):

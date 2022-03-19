@@ -16,12 +16,12 @@ enum class LayoutType {
   LIGHT,
   NORMAL,
   LEVELDB,
-  NORMAL_FIX
+  NORMAL_CONTIGUOUS
 };
 
 namespace {
 constexpr int COLUMN_BITSET_BYTES = 5;
-constexpr int COLUMN_BITSET_SIZE = COLUMN_BITSET_BYTES * sizeof(char);
+constexpr int COLUMN_BITSET_SIZE = COLUMN_BITSET_BYTES * 8;
 
 struct MetaHeader {
   unsigned char embed_num;
@@ -203,7 +203,7 @@ class ValuePtr {
         return ((V**)((int64*)ptr_ + (unsigned int)meta->header_size))[emb_index];
       embnum++ ;
       int64 alloc_value_len = value_len;
-      V* tensor_val = TypedAllocator::Allocate<V>(allocator, alloc_value_len, AllocationAttributes());
+      V* tensor_val = (V*)allocator->AllocateRaw(0/*alignemnt unused*/, sizeof(V) * alloc_value_len);
       memcpy(tensor_val, default_v, sizeof(V) * value_len);
       ((V**)((int64*)ptr_ + meta->GetHeaderSize()))[emb_index]  = tensor_val;
 
@@ -220,7 +220,7 @@ class ValuePtr {
   }
 
   // simple getter for V* and version
-  virtual V* GetValue(int emb_index, int64 value_len, int offset) {
+  virtual V* GetValue(int emb_index, int offset) {
     MetaHeader* meta = (MetaHeader*)ptr_;
     auto metadata = meta->GetColumnBitset();
     if (metadata.test(emb_index)) {
@@ -230,11 +230,9 @@ class ValuePtr {
     }
   }
 
-  virtual void Commit(int64 value_len, const V* v, int emb_index) {}
-
   virtual void Free(const V* v) {}
 
-  virtual void Destroy(Allocator* allocator, int64 value_len) {
+  virtual void Destroy(Allocator* allocator) {
     MetaHeader* meta = (MetaHeader*)ptr_;
     unsigned int embnum = (unsigned int)meta->embed_num;
     auto metadata = meta->GetColumnBitset();
@@ -242,10 +240,14 @@ class ValuePtr {
       if (metadata.test(i)) {
         V* val = ((V**)((int64*)ptr_ + meta->GetHeaderSize()))[i];
         if (val != nullptr) {
-          TypedAllocator::Deallocate(allocator, val, value_len);
+          allocator->DeallocateRaw(val);
         }
       }
     }
+  }
+
+  virtual void* GetPtr() const {
+    return this->ptr_;
   }
 
   // Global Step
@@ -282,7 +284,7 @@ class ValuePtr {
 template <class V>
 class LightValuePtr : public ValuePtr<V> {
  public:
-  LightValuePtr(size_t size) {
+  LightValuePtr(Allocator* allocator, size_t size) {
     this->ptr_ = (void*) malloc(sizeof(LightHeader) + sizeof(int64) * size);
     memset(this->ptr_ + sizeof(LightHeader), 0, sizeof(int64) * size);
     new ((char*)this->ptr_) LightHeader();
@@ -296,7 +298,7 @@ class LightValuePtr : public ValuePtr<V> {
 template <class V>
 class NormalValuePtr : public ValuePtr<V> {
  public:
-  NormalValuePtr(size_t size) {
+  NormalValuePtr(Allocator* allocator, size_t size) {
     this->ptr_ = (void*) malloc(sizeof(NormalHeader) + sizeof(int64) * size);
     memset(this->ptr_ + sizeof(NormalHeader), 0, sizeof(int64) * size);
     new ((char*)this->ptr_) NormalHeader();
@@ -340,14 +342,13 @@ class NormalValuePtr : public ValuePtr<V> {
 template <class V>
 class NormalContiguousValuePtr : public ValuePtr<V>{
   public:
-   NormalContiguousValuePtr(size_t size) {
-    this->ptr_ = (void*)malloc(sizeof(FixedLengthHeader) + sizeof(V) * size);
+   NormalContiguousValuePtr(Allocator* allocator, size_t size) {
+    this->ptr_ = allocator->AllocateRaw(0/*alignemnt unused*/, sizeof(FixedLengthHeader) + sizeof(V) * size);
     memset(this->ptr_ + sizeof(FixedLengthHeader), 0, sizeof(V) * size);
     new ((char*)this->ptr_) FixedLengthHeader();
    }
   
    ~NormalContiguousValuePtr(){
-    free(this->ptr_);
    }
 
   virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset) override {
@@ -369,7 +370,7 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
     }
   }
 
-  virtual V* GetValue(int emb_index, int64 value_len, int offset) {
+  virtual V* GetValue(int emb_index, int offset) {
     int8 meta = *((int8*)((char*)this->ptr_ + 6));
     std::bitset<8> bs(meta);
     if (bs.test(emb_index)) {
@@ -379,8 +380,8 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
     }
   }
 
-  virtual void Destroy(Allocator* allocator, int64 value_len) {
-    return;
+  virtual void Destroy(Allocator* allocator) {
+    allocator->DeallocateRaw(this->ptr_);
   }
   
   int64 GetStep() {
@@ -406,122 +407,6 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
   void AddFreq(int64 count) {
     ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
   }
-};
-
-template <class V>
-class DBValuePtr : public NormalValuePtr<V> {
- public:
-  DBValuePtr(size_t size, leveldb::DB* level_db) : NormalValuePtr<V>(size),
-    level_db_(level_db) {
-  }
-
-  ~DBValuePtr() {
-  }
-
-  virtual V* GetOrAllocate(Allocator* allocator, int64 value_len, const V* default_v, int emb_index, int offset) {
-    MetaHeader* meta = (MetaHeader*)this->ptr_;
-    unsigned int embnum = (unsigned int)meta->embed_num;
-    auto metadata = meta->GetColumnBitset();
-
-    if (!metadata.test(emb_index)) {
-      while(this->flag_.test_and_set(std::memory_order_acquire));
-      if (metadata.test(emb_index)) {
-        V* key = &((V*)((int64*)this->ptr_ + meta->GetHeaderSize()))[emb_index];
-        leveldb::Slice db_key((char*)(&key), sizeof(void*));
-        std::string value;
-        leveldb::ReadOptions options;
-
-        leveldb::Status st = level_db_->Get(options, db_key, &value);
-        if (!st.ok()){
-          LOG(FATAL) << "Fail to Get leveldb: " << level_db_ << ", key: " << &this->ptr_<< ", index: " << emb_index << ", msg: " << st.ToString();
-        }
-        V* tensor_val = (V*)malloc(value_len * sizeof(V));
-        memcpy(tensor_val, value.data(), value_len*sizeof(V));
-        return tensor_val;
-      }
-      embnum++ ;
-      int64 alloc_value_len = value_len;
-      V* tensor_val = (V*)malloc(value_len * sizeof(V));
-      memcpy(tensor_val, default_v, sizeof(V) * value_len);
-
-      V* key = &((V*)((int64*)this->ptr_ + meta->GetHeaderSize()))[emb_index];
-      leveldb::Slice db_key((char*)(&key), sizeof(void*));
-      leveldb::Slice db_value((char*)default_v, value_len*sizeof(V));
-
-      leveldb::WriteOptions options;
-      leveldb::Status st = level_db_->Put(options, db_key, db_value);
-      if (!st.ok()) {
-        LOG(FATAL) << "Fail to Put leveldb: "  <<&this->ptr_ << ", index: "<<emb_index <<", msg: "<< st.ToString();
-      }
-
-      metadata.set(emb_index);
-      // NOTE:if we use ((unsigned long*)((char*)ptr_ + 1))[0] = metadata.to_ulong();
-      // the ptr_ will be occaionally  modified from 0x7f18700912a0 to 0x700912a0
-      // must use  ((V**)ptr_ + 1 + 1)[emb_index] = tensor_val;  to avoid
-      meta->SetColumnBitset(metadata, embnum);
-      this->flag_.clear(std::memory_order_release);
-      return tensor_val;
-    } else {
-      V* key = &((V*)((int64*)this->ptr_ + meta->GetHeaderSize()))[emb_index];
-      leveldb::Slice db_key((char*)(&key), sizeof(void*));
-      std::string value;
-      leveldb::ReadOptions options;
-
-      leveldb::Status st = level_db_->Get(options, db_key, &value);
-      if (!st.ok()){
-        LOG(FATAL) << "Fail to Get leveldb: " << level_db_ << ", key: " << &this->ptr_<< ", index: " << emb_index << ", msg: " << st.ToString();
-      }
-      V* tensor_val = (V*)malloc(value_len * sizeof(V));
-      memcpy(tensor_val, value.data(), value_len*sizeof(V));
-      return tensor_val;
-    }
-  }
-
-  virtual void Commit(int64 value_len, const V* v, int emb_index) {
-    MetaHeader* meta = (MetaHeader*)this->ptr_;
-
-    V* key = &((V*)((int64*)this->ptr_ + meta->GetHeaderSize()))[emb_index];
-    leveldb::Slice db_key((char*)(&key), sizeof(void*));
-    leveldb::Slice db_value((char*)v, value_len * sizeof(V));
-
-    leveldb::WriteOptions options;
-    leveldb::Status st = level_db_->Put(options, db_key, db_value);
-    if (!st.ok()) {
-      LOG(FATAL) << "Fail to Put leveldb: "  << &this->ptr_<< ", index: "<<emb_index <<", msg: "<< st.ToString();
-    }
-    Free(v);
-  }
-
-  virtual void Free(const V* v) {
-    free((void*)v);
-  }
-
-  virtual V* GetValue(int emb_index, int64 value_len) {
-    MetaHeader* meta = (MetaHeader*)this->ptr_;
-    auto metadata = meta->GetColumnBitset();
-    if (metadata.test(emb_index)) {
-      V* key = &((V*)((int64*)this->ptr_ + meta->GetHeaderSize()))[emb_index];
-      leveldb::Slice db_key((char*)(&key), sizeof(void*));
-      std::string value;
-      leveldb::ReadOptions options;
-
-      leveldb::Status st = level_db_->Get(options, db_key, &value);
-      if (!st.ok()){
-        LOG(FATAL) << "Fail to Get leveldb: " << level_db_ << ", key: " << &this->ptr_<< ", index: " << emb_index << ", msg: " << st.ToString();
-      }
-      V* tensor_val = (V*)malloc(value_len * sizeof(V));
-      memcpy(tensor_val, value.data() + value_len*sizeof(V) * emb_index, value_len*sizeof(V));
-      return tensor_val;
-    } else {
-      return nullptr;
-    }
-  }
-
-  virtual void Destroy(int64 value_len) {}
-
- private:
-  leveldb::DB* level_db_;
-
 };
 
 }  // namespace tensorflow

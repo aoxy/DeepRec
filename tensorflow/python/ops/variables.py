@@ -33,6 +33,7 @@ from tensorflow.python.eager import context
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_shape
+from tensorflow.python.lib.io import file_io
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import gen_array_ops
@@ -243,9 +244,20 @@ class CheckpointOption(object):
 class StorageOption(object):
   def __init__(self,
                storage_type=None,
-               storage_path=None):
+               storage_path=None,
+               storage_size=None):
     self.storage_type = storage_type
     self.storage_path = storage_path
+    self.storage_size = storage_size
+    if storage_path is not None:
+      if storage_type is None:
+        raise ValueError("storage_type musnt'be None when storage_path is set")
+      else:
+        if not file_io.file_exists(storage_path):
+          file_io.recursive_create_dir(storage_path)
+    else:
+      if storage_type is not None and storage_type in [config_pb2.StorageType.LEVELDB, config_pb2.StorageType.SSD]:
+        raise ValueError("storage_path musnt'be None when storage_type is set")
 
 @tf_export(v1=["EmbeddingVariableOption"])
 class EmbeddingVariableOption(object):
@@ -310,6 +322,7 @@ class EmbeddingVariableConfig(object):
                primary_slotnum_op=None,
                storage_type=config_pb2.StorageType.DRAM,
                storage_path=None,
+               storage_size=None,
                default_value_dim=4096):
     self.steps_to_live = steps_to_live
     self.steps_to_live_l2reg = steps_to_live_l2reg
@@ -330,6 +343,7 @@ class EmbeddingVariableConfig(object):
     self.filter_strategy = filter_strategy
     self.storage_type = storage_type
     self.storage_path = storage_path
+    self.storage_size = storage_size
     self.default_value_dim = default_value_dim
 
   def reveal(self):

@@ -122,6 +122,18 @@ class Allocator {
     return AllocateRaw(alignment, num_bytes);
   }
 
+  virtual size_t BatchAllocateRaw(size_t num,
+      size_t alignment, size_t num_bytes, void** ret) {
+    for (size_t i = 0; i < num; ++i) {
+      auto ptr = AllocateRaw(alignment, num_bytes);
+      if (ptr == nullptr) {
+        return i;
+      }
+      ret[i] = ptr;
+    }
+    return num;
+  }
+
   // Deallocate a block of memory pointer to by "ptr"
   // REQUIRES: "ptr" was previously returned by a call to AllocateRaw
   virtual void DeallocateRaw(void* ptr) = 0;
@@ -337,10 +349,13 @@ Allocator* cpu_allocator_base();
 // call it directly.
 Allocator* cpu_allocator(int numa_node = port::kNUMANoAffinity);
 
-//If use PMEM as allocator, please call this function
+//If use PMEM mode of memkind as allocator, please call this function
 Allocator* pmem_allocator();
 
 Allocator* ev_allocator();
+
+// If use experimental libpmem based PMEM allocator, please call this function
+Allocator* experimental_pmem_allocator(const std::string& pmem_path, size_t allocator_size);
 
 // If 'enable' is true, the default CPU allocator implementation will collect
 // AllocatorStats. By default, it's disabled.
