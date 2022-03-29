@@ -1220,7 +1220,7 @@ void BatchLookup(KVInterface<int64, float>* hashmap, std::vector<int64> keys) {
   LOG(INFO) << "BatchLookup time: " << result_cost << " ns";
 }
 
-/*
+
 void LevelDBKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new LevelDBKV<int64, float>("/tmp/db_ut1");
   hashmap->SetTotalDims(128);
@@ -1230,6 +1230,7 @@ void LevelDBKVTest(int total_size, int batch_size){
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
   t2.join();
+  delete hashmap;
 }
 
 TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
@@ -1245,7 +1246,6 @@ TEST(KVInterfaceTest, TestLargeLEVELDBKV) {
     }
   }
 }
-*/
 
 void SSDKVTest(int total_size, int batch_size){
   KVInterface<int64, float>* hashmap = new SSDKV<int64, float>("/tmp/ssd_ut1");
@@ -1256,6 +1256,7 @@ void SSDKVTest(int total_size, int batch_size){
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
   t2.join();
+  delete hashmap;
 }
 
 
@@ -1285,6 +1286,7 @@ void LevelDBKVSingleTest(int total_size){
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
   t2.join();
+  delete hashmap;
 }
 
 TEST(KVInterfaceTest, TestLargeSingleLEVELDBKV) {
@@ -1311,6 +1313,7 @@ void SSDKVSingleTest(int total_size){
   t1.join();
   auto t2 = std::thread(BatchLookup, hashmap, dl.ids);
   t2.join();
+  delete hashmap;
 }
 
 
