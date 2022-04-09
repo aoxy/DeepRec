@@ -165,7 +165,7 @@ class StorageManager {
         kvs_[1].first->SetTotalDims(total_dims_);
       }
       if (hash_table_count_ > 1) {
-        cache_capacity_ = 1024 * 1024 * 1024 / (total_dims_ * sizeof(V)); // 1 GB
+        cache_capacity_ = (50 << 20) / (total_dims_ * sizeof(V)); // 50 MB
         done_ = true;
         LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
       }
@@ -225,6 +225,10 @@ class StorageManager {
   Status GetOrCreate(K key, ValuePtr<V>** value_ptr, size_t size) {
     bool found = false;
     int level = 0;
+    if (cache_){
+      cache_->add_to_rank(&key, 1);
+    }
+    
     for (; level < hash_table_count_; ++level) {
       Status s = kvs_[level].first->Lookup(key, value_ptr);
       if (s.ok()) {
@@ -263,6 +267,11 @@ class StorageManager {
     for (auto kv : kvs_) {
       total_size += kv.first->Size();
     }
+    LOG(INFO) << "kvs_[0].first->Size() = " << kvs_[0].first->Size();
+    if(kvs_.size()==2){
+      LOG(INFO) << "kvs_[1].first->Size() = " << kvs_[1].first->Size();
+    }
+    
     return total_size;
   }
 
@@ -403,6 +412,7 @@ class StorageManager {
         mutex_lock l(mu_);
         if (done_) {
           break;
+          LOG(INFO) << "411";
         }
       }
     }
@@ -412,10 +422,12 @@ class StorageManager {
       if (shutdown_) {
         break;
       }
+      LOG(INFO) << "421";
       const int kTimeoutMilliseconds = 10 * 1;
       WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
 
       int cache_count = cache_->size();
+      LOG(INFO) << cache_count;
       if (cache_count > cache_capacity_) {
         // eviction
         int k_size = cache_count - cache_capacity_;
