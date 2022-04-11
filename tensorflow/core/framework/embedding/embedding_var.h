@@ -192,41 +192,16 @@ class EmbeddingVar : public ResourceBase {
                 int64 key_num,
                 int bucket_num,
                 int64 partition_id,
-                int64 partition_num) {
-    K* key_buff = (K*)restore_buff.key_buffer;
-    V* value_buff = (V*)restore_buff.value_buffer;
-    int64* version_buff = (int64*)restore_buff.version_buffer;
-    int64* freq_buff = (int64*)restore_buff.freq_buffer;
-    for (auto i = 0; i < key_num; ++i) {
-      // this can describe by graph(Mod + DynamicPartition), but memory waste and slow
-      if (*(key_buff + i) % bucket_num % partition_num != partition_id) {
-        LOG(INFO) << "skip EV key:" << *(key_buff + i);
-        continue;
-      }
-      ValuePtr<V>* value_ptr = nullptr;
-      TF_CHECK_OK(LookupOrCreateKey(key_buff[i], &value_ptr));
-      if (emb_config_.is_primary()) {
-        if (emb_config_.filter_freq != 0) {
-          if (freq_buff[i] <= emb_config_.filter_freq) {
-            value_ptr->SetFreq(emb_config_.filter_freq);
-          } else {
-            value_ptr->SetFreq(freq_buff[i]);
-          }
-        }
-        if (emb_config_.steps_to_live != 0) {
-          value_ptr->SetStep(version_buff[i]);
-        }
-      }
-      V* v = LookupOrCreateEmb(value_ptr, value_buff + i * value_len_);
-      TF_CHECK_OK(storage_manager_->Commit(key_buff[i], value_ptr));
-    }
-    return Status::OK();
+                int64 partition_num,
+                bool is_filter) {
+    return filter_->Import(restore_buff, key_num, bucket_num, partition_id, partition_num, is_filter);
   }
 
   int64 GetSnapshot(std::vector<K>* key_list, std::vector<V* >* value_list,
-                    std::vector<int64>* version_list, std::vector<int64>* freq_list) {
+                    std::vector<int64>* version_list, std::vector<int64>* freq_list,
+                    embedding::Iterator** it) {
     return storage_manager_->GetSnapshot(key_list, value_list, version_list,
-                                         freq_list, emb_config_, filter_);
+                                         freq_list, emb_config_, filter_, it);
   }
 
   Status Destroy() {
@@ -259,8 +234,16 @@ class EmbeddingVar : public ResourceBase {
     return emb_config_.default_value_dim;
   }
 
+  V* GetDefaultValue(int64 key) {
+    return default_value_ + (key % emb_config_.default_value_dim) * value_len_;
+  }
+
   void SetSlotNum(int64 slot_num) {
     emb_config_.slot_num = slot_num;
+  }
+
+  int64 GetSlotNum() {
+    return emb_config_.slot_num;
   }
 
   embedding::BatchCache<K>* Cache() {
