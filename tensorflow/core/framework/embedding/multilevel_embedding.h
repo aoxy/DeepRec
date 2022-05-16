@@ -14,6 +14,7 @@
 namespace tensorflow {
 template <class V>
 class ValuePtr;
+
 template <class K, class V>
 class EmbeddingVar;
 
@@ -59,12 +60,6 @@ class StorageManager {
   is_multi_level_(false) {}
 
   ~StorageManager() {
-    if (eviction_thread_) {
-      mutex_lock l(mu_);
-      shutdown_cv_.notify_all();
-      shutdown_ = true;
-    }
-    delete eviction_thread_;
     for (auto kv: kvs_) {
       delete kv.first;
     }
@@ -118,12 +113,12 @@ class StorageManager {
         break;
       case StorageType::SSD:
         VLOG(1) << "StorageManager::SSD: " << name_;
-        kvs_.push_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
+        kvs_.emplace_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
         break;
       case StorageType::DRAM_SSD:
         VLOG(1) << "StorageManager::DRAM_SSD: " << name_;
-        kvs_.push_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
-        kvs_.push_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
+        kvs_.emplace_back(std::make_pair(new LocklessHashMap<K, V>(), ev_allocator()));
+        kvs_.emplace_back(std::make_pair(new SSDKV<K, V>(sc_.path), ev_allocator()));
         break;
       default:
         VLOG(1) << "StorageManager::default" << name_;
@@ -165,7 +160,7 @@ class StorageManager {
         kvs_[1].first->SetTotalDims(total_dims_);
       }
       if (hash_table_count_ > 1) {
-        cache_capacity_ = (50 << 20) / (total_dims_ * sizeof(V)); // 50 MB
+        cache_capacity_ = 1024 * 1024 * 1024 / (total_dims_ * sizeof(V));
         done_ = true;
         LOG(INFO) << "Cache cache_capacity: " << cache_capacity_;
       }
@@ -290,29 +285,39 @@ class StorageManager {
 
   int64 GetSnapshot(std::vector<K>* key_list, std::vector<V* >* value_list,
                     std::vector<int64>* version_list, std::vector<int64>* freq_list,
-                    const EmbeddingConfig& emb_config, EmbeddingFilter<K, V, EmbeddingVar<K, V>>* filter) {
-    mutex_lock l(mu_);
+                    const EmbeddingConfig& emb_config, EmbeddingFilter<K, V, EmbeddingVar<K, V>>* filter,
+                    embedding::Iterator** it) {
     for (auto kv : kvs_) {
       std::vector<ValuePtr<V>* > value_ptr_list;
       std::vector<K> key_list_tmp;
       TF_CHECK_OK(kv.first->GetSnapshot(&key_list_tmp, &value_ptr_list));
+      if (key_list_tmp.empty()) {
+        *it = kv.first->GetIterator();
+        continue;
+      }
       for (int64 i = 0; i < key_list_tmp.size(); ++i) {
         V* val = value_ptr_list[i]->GetValue(emb_config.emb_index, GetOffset(emb_config.emb_index));
         V* primary_val = value_ptr_list[i]->GetValue(emb_config.primary_emb_index, GetOffset(emb_config.primary_emb_index));
-        if (val != nullptr && primary_val != nullptr) {
-          value_list->push_back(val);
-          key_list->push_back(key_list_tmp[i]);
-          if (emb_config.filter_freq != 0 || is_multi_level_) {
+        key_list->push_back(key_list_tmp[i]);
+        if (emb_config.filter_freq != 0 || is_multi_level_) {
             int64 dump_freq = filter->GetFreq(key_list_tmp[i], value_ptr_list[i]);
             freq_list->push_back(dump_freq);
-          }
-          if (emb_config.steps_to_live != 0) {
+        }
+        if (emb_config.steps_to_live != 0) {
             int64 dump_version = value_ptr_list[i]->GetStep();
             version_list->push_back(dump_version);
-          }
+        }
+        if (val != nullptr && primary_val != nullptr) {
+          value_list->push_back(val);  
+        } else if (val == nullptr && primary_val != nullptr) {
+          // only forward, no backward
+          value_list->push_back(reinterpret_cast<V*>(-1));
+        } else {
+          // feature filtered
+          value_list->push_back(nullptr);
         }
         // storage_manager_->FreeValuePtr(value_ptr_list[i]);
-      }
+      } 
     }
     return key_list->size();
   }
@@ -375,6 +380,12 @@ class StorageManager {
   }
 
   Status Destroy() {
+    if (eviction_thread_) {
+      mutex_lock l(mu_);
+      shutdown_cv_.notify_all();
+      shutdown_ = true;
+    }
+    delete eviction_thread_;
     mutex_lock l(mu_);
     std::vector<K> key_list;
     std::vector<ValuePtr<V>* > value_ptr_list;
@@ -402,11 +413,18 @@ class StorageManager {
     return Status::OK();
   }
 
+  Status CommitForRestore(K key, ValuePtr<V>* value_ptr) {
+    TF_CHECK_OK(kvs_[0].first->CommitForRestore(key, value_ptr));
+    return Status::OK();
+  }
+
   void FreeValuePtr(ValuePtr<V>* value_ptr) {
     for (auto kv : kvs_) {
       kv.first->FreeValuePtr(value_ptr);
     }
   }
+
+  mutex* get_mutex() { return &mu_; }
 
  private:
   void BatchEviction() {
@@ -428,7 +446,13 @@ class StorageManager {
       }
       const int kTimeoutMilliseconds = 10 * 1;
       WaitForMilliseconds(&l, &shutdown_cv_, kTimeoutMilliseconds);
-
+     
+      for (int i = 0; i < value_ptr_out_of_date_.size(); i++) {
+        value_ptr_out_of_date_[i]->Destroy(kvs_[0].second);
+        delete value_ptr_out_of_date_[i];
+      }
+      value_ptr_out_of_date_.clear();
+      
       int cache_count = cache_->size();
       // LOG(INFO) << "cache_count = " << cache_count;
       if (cache_count > cache_capacity_) {
@@ -440,9 +464,12 @@ class StorageManager {
         ValuePtr<V>* value_ptr;
         for (int64 i = 0; i < true_size; ++i) {
           if (kvs_[0].first->Lookup(evic_ids[i], &value_ptr).ok()) {
-            TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
             TF_CHECK_OK(kvs_[1].first->Commit(evic_ids[i], value_ptr));
+            TF_CHECK_OK(kvs_[0].first->Remove(evic_ids[i]));
+            value_ptr_out_of_date_.emplace_back(value_ptr);
             // delete value_ptr is nessary;
+            //value_ptr->Destroy(kvs_[0].second);
+            //delete value_ptr;
           } else {
             // bypass
           }
@@ -455,6 +482,7 @@ class StorageManager {
   int32 hash_table_count_;
   std::string name_;
   std::vector<std::pair<KVInterface<K, V>*, Allocator*>> kvs_;
+  std::vector<ValuePtr<V>*> value_ptr_out_of_date_;
   std::function<ValuePtr<V>*(Allocator*, size_t)> new_value_ptr_fn_;
   StorageConfig sc_;
   bool is_multi_level_;

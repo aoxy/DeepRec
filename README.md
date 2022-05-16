@@ -28,7 +28,7 @@ DeepRec has super large-scale distributed training capability, supporting model 
 #### **Deploy and Serving**
  - Incremental model loading and exporting
  - Super-scale sparse model distributed serving
- - Multilevel hybrid storage and multi backend supported ..
+ - Multilevel hybrid storage and multi backend supported
  - Online deep learning with low latency
 
 
@@ -47,15 +47,19 @@ registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-developer:deeprec-dev-cp
 
 GPU Platform
 
-
 ```
 registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-developer:deeprec-dev-gpu-py36-cu110-ubuntu18.04
 ```
+
 ### **How to Build**
 
 configure
 ```
 $ ./configure
+```
+Setup Environment Variable (Compile for GPU)
+```
+$ export TF_CUDA_COMPUTE_CAPABILITIES="7.5,8.0"
 ```
 Compile for CPU and GPU defaultly
 ```
@@ -82,17 +86,44 @@ $ ./bazel-bin/tensorflow/tools/pip_package/build_pip_package /tmp/tensorflow_pkg
 $ pip3 install /tmp/tensorflow_pkg/tensorflow-1.15.5+${version}-cp36-cp36m-linux_x86_64.whl
 ```
 
+### **How to Build serving library**
 
+configure will modify .bazelrc file, please revert the change when you build DeepRec whl.
+```
+./configure serving
+```
+Or configure with some flags,
+```
+./configure serving --mkl
+./configure serving --mkl_open_source_v1_only
+./configure serving --mkl_threadpool
+./configure serving --mkl --cuda ...
+```
+More details see: serving/configure.py
 
+build processor library, this will generate libserving_processor.so. User should load the library, then call serving API to predict.
+```
+bazel build //serving/processor/serving:libserving_processor.so
+```
 
-### **Nightly Images**
+UT test
+```
+bazel test -- //serving/processor/... -//serving/processor/framework:lookup_manual_test
+```
+
+End2End test
+```
+Details please see: serving/processor/tests/end2end/README
+```
+
+### **Latest Release Images**
 #### Image for GPU CUDA11.0
 ```
-registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-training:deeprec-nightly-gpu-py36-cu110-ubuntu18.04
+registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-training:deeprec2204-gpu-py36-cu110-ubuntu18.04
 ```
 #### Image for CPU
 ```
-registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-training:deeprec-nightly-cpu-py36-ubuntu18.04
+registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-training:deeprec2204-cpu-py36-ubuntu18.04
 ```
 
 
@@ -105,6 +136,7 @@ registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-training:deeprec-nightly
 | ------------- | ------------------------------------------------------------ |
 | **Linux CPU** | ![CPU Build](https://github.com/alibaba/DeepRec/actions/workflows/ubuntu18.04-py3.6-cibuild-build-wheel.yaml/badge.svg) |
 | **Linux GPU** | ![GPU Build](https://github.com/alibaba/DeepRec/actions/workflows/ubuntu18.04-py3.6-cuda11.2-cibuild-build-wheel.yaml/badge.svg) |
+| **Linux CPU Serving** | ![CPU Serving Build](https://github.com/alibaba/DeepRec/actions/workflows/ubuntu18.04-py3.6-cibuild-build-serving.yaml/badge.svg) |
 
 ### Official Unit Tests
 
@@ -128,6 +160,7 @@ registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-training:deeprec-nightly
 | **Linux GPU JS** | ![GPU JS Unit Tests](https://github.com/alibaba/DeepRec/actions/workflows/ubuntu18.04-py3.6-cuda11.2-cibuild-js-unit-test.yaml/badge.svg) |
 | **Linux GPU Python** | ![GPU Python Unit Tests](https://github.com/alibaba/DeepRec/actions/workflows/ubuntu18.04-py3.6-cuda11.2-cibuild-python-unit-test.yaml/badge.svg) |
 | **Linux GPU Stream Executor** | ![GPU Stream Executor Unit Tests](https://github.com/alibaba/DeepRec/actions/workflows/ubuntu18.04-py3.6-cuda11.2-cibuild-stream_executor-unit-test.yaml/badge.svg) |
+| **Linux CPU Serving UT** | ![CPU Serving Unit Tests](https://github.com/alibaba/DeepRec/actions/workflows/ubuntu18.04-py3.6-cibuild-serving-unit-test.yaml/badge.svg) |
 
 ## **User Document (Chinese)**
 

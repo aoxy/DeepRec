@@ -426,6 +426,13 @@ class EVAllocator : public Allocator {
   string Name() override { return "ev_allocator"; }
 
   void* AllocateRaw(size_t alignment, size_t num_bytes) override {
+    num_bytes = AlignedSize(num_bytes);
+
+    if (num_bytes > kChunkSize) {
+      LOG(FATAL) << "Allocation of " << num_bytes << " exceeds "
+                 << kChunkSize << " in EVAllocator.";
+    }
+
     if (num_bytes > LargeAllocationWarningBytes() &&
         single_allocation_warning_count_ < kMaxSingleAllocationWarnings) {
       ++single_allocation_warning_count_;
@@ -434,10 +441,9 @@ class EVAllocator : public Allocator {
                    << "% of system memory.";
     }
 
-    alignment = 8;
-    void* p = port::AlignedMalloc(num_bytes, alignment);
+    void* p = impl_.Allocate(num_bytes);
     if (ev_allocator_collect_stats) {
-      const std::size_t alloc_size = port::MallocExtension_GetAllocatedSize(p);
+      const std::size_t alloc_size = impl_.AllocatedSize(p);
       mutex_lock l(mu_);
       ++stats_.num_allocs;
       stats_.bytes_in_use += alloc_size;
@@ -457,9 +463,15 @@ class EVAllocator : public Allocator {
     return p;
   }
 
-  /*
   size_t BatchAllocateRaw(size_t num, size_t alignment,
       size_t num_bytes, void** ret) override {
+    num_bytes = AlignedSize(num_bytes);
+
+    if (num_bytes > kChunkSize) {
+      LOG(FATAL) << "Allocation of " << num_bytes << " exceeds "
+                 << kChunkSize << " in EVAllocator.";
+    }
+
     if (num_bytes > LargeAllocationWarningBytes() &&
         single_allocation_warning_count_ < kMaxSingleAllocationWarnings) {
       ++single_allocation_warning_count_;
@@ -495,18 +507,17 @@ class EVAllocator : public Allocator {
       }
     }
     return allocated_num;
-  }*/
+  }
 
   void DeallocateRaw(void* ptr) override {
     if (ev_allocator_collect_stats) {
-      const std::size_t alloc_size =
-          port::MallocExtension_GetAllocatedSize(ptr);
+      const std::size_t alloc_size = impl_.AllocatedSize(ptr);
       
       mutex_lock l(mu_);
       stats_.bytes_in_use -= alloc_size;
     }
 
-    port::AlignedFree(ptr);
+    impl_.Deallocate(ptr);
   }
 
   absl::optional<AllocatorStats> GetStats() override {
@@ -522,7 +533,22 @@ class EVAllocator : public Allocator {
   }
 
   size_t AllocatedSizeSlow(const void* ptr) const override {
-    return port::MallocExtension_GetAllocatedSize(ptr);
+    return impl_.AllocatedSize(ptr);
+  }
+
+ private:
+  // Return the smallest alignment multiple that is >= s.
+  #define ALIGNMENT_CEILING(s, alignment)         \
+    (((s) + (alignment - 1)) & ((~(alignment)) + 1))
+
+  size_t AlignedSize(size_t num_bytes) {
+    // small allocation no need alignment here.
+    if (num_bytes <= sizeof(__m128)) {
+      return num_bytes;
+    }
+
+    // Use _mm_load_ps instructions need aligned address.
+    return ALIGNMENT_CEILING(num_bytes, sizeof(__m128));
   }
 
  private:
@@ -533,6 +559,8 @@ class EVAllocator : public Allocator {
   // statistics are disabled.
   std::atomic<int> single_allocation_warning_count_;
   int total_allocation_warning_count_ GUARDED_BY(mu_);
+
+  EVAllocatorImpl impl_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(EVAllocator);
 };

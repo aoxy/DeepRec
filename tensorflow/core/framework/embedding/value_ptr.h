@@ -7,8 +7,6 @@
 #include <memory>
 
 #include "tensorflow/core/framework/typed_allocator.h"
-#include "leveldb/db.h"
-#include "leveldb/comparator.h"
 
 namespace tensorflow {
 
@@ -199,8 +197,11 @@ class ValuePtr {
 
     if (!metadata.test(emb_index)) {
       while(flag_.test_and_set(std::memory_order_acquire));
-      if (metadata.test(emb_index))
+      metadata = meta->GetColumnBitset();
+      if (metadata.test(emb_index)){
+        flag_.clear(std::memory_order_release);
         return ((V**)((int64*)ptr_ + (unsigned int)meta->header_size))[emb_index];
+      }
       embnum++ ;
       int64 alloc_value_len = value_len;
       V* tensor_val = (V*)allocator->AllocateRaw(0/*alignemnt unused*/, sizeof(V) * alloc_value_len);
@@ -276,20 +277,12 @@ class ValuePtr {
     LOG(FATAL) << "Unsupport FreqCounter in subclass of ValuePtrBase";
   }
 
-  virtual void PrintValue(size_t size){
-    LOG(FATAL) << "Unsupport PrintValue in subclass of ValuePtrBase";
-  }
-
-  virtual bool EqualTo(ValuePtr<V>* value_ptr, size_t size) {
-    LOG(FATAL) << "Unsupport EqualTo in subclass of ValuePtrBase";
-  }
-
   virtual void SetValue(V val, size_t size){
     LOG(FATAL) << "Unsupport SetValue in subclass of ValuePtrBase";
   }
 
-  virtual void UpdateTest(size_t size){
-    LOG(FATAL) << "Unsupport UpdateTest in subclass of ValuePtrBase";
+  virtual void MergeValuePtr(ValuePtr* val, int64 size) {
+    LOG(FATAL) << "Unsupport MergeValuetpr in subclass of ValuePtrBase";
   }
 
  protected:
@@ -420,58 +413,20 @@ class NormalContiguousValuePtr : public ValuePtr<V>{
     ((FixedLengthHeader*)this->ptr_)->AddFreq();
   }
 
+  void MergeValuePtr(ValuePtr<V>* val, int64 size) {
+    int64* val_ptr = (int64*)val->GetPtr();
+    for(int i = 0; i < sizeof(FixedLengthHeader) + size/sizeof(int64); i++){
+      ((int64*)this->ptr_)[i] |= val_ptr[i];
+    }
+  }
+
   void AddFreq(int64 count) {
     ((FixedLengthHeader*)this->ptr_)->AddFreq(count);
   }
 
-  void PrintValue(size_t size) {
-    std::string val_str;
-    val_str += "Step=" + std::to_string(GetStep());
-    val_str += ", Freq=" +std::to_string(GetFreq())+", Value=[";
-    for(int i = 0; i < size-1; ++i){
-      val_str += std::to_string(*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i)) + ", ";
-    }
-    val_str += std::to_string(*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + size - 1)) + "]\n";
-    LOG(INFO) << val_str;
-  }
-
-  bool EqualTo(ValuePtr<V>* value_ptr, size_t size) {
-    if (GetStep() != value_ptr->GetStep()) {
-      return false;
-    }
-    if (GetFreq() != value_ptr->GetFreq()) {
-      return false;
-    }
-    for(int i = 0; i < size; ++i) {
-      // LOG(INFO) << std::to_string(*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i));
-      // LOG(INFO) << std::to_string(*((V*)value_ptr->GetPtr() + sizeof(FixedLengthHeader) / sizeof(V) + i));
-      if (*((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) != *((V*)value_ptr->GetPtr() + sizeof(FixedLengthHeader) / sizeof(V) + i)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   void SetValue(V val, size_t size){
-    SetStep(int64(val));
-    SetFreq(int64(val));
     for(int i = 0; i < size; ++i) {
       *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) = val;
-    }
-  }
-
-  void UpdateTest(size_t size){
-    for (size_t i = 0; i < 50; i++)
-    {
-      for(int i = 0; i < size; ++i) {
-        *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) += 1;
-      }
-    }
-    for (size_t i = 0; i < 50; i++)
-    {
-      for(int i = 0; i < size; ++i) {
-        *((V*)this->ptr_ + sizeof(FixedLengthHeader) / sizeof(V) + i) -= 1;
-      }
     }
   }
 };
