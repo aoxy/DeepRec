@@ -646,7 +646,8 @@ Status GraphExecutionState::PipelineGraph(std::unique_ptr<Graph>* g,
 }
 
 Status GraphExecutionState::SmartStageGraph(std::unique_ptr<Graph>* g,
-                                            const std::vector<std::string>& target_nodes) {
+                                            const std::vector<std::string>& target_nodes,
+                                            const bool do_smart_stage_gpu) {
     VLOG(2) << "GraphExecutionState::SmartStageGraph";
     Graph* graph = g->get();
     std::unique_ptr<Graph> staged_graph(new Graph(OpRegistry::Global()));
@@ -662,10 +663,33 @@ Status GraphExecutionState::SmartStageGraph(std::unique_ptr<Graph>* g,
         unstage_node_map[name] = n;
       }
     }
+
+    // there should find only one cpu device
+    std::vector<Device *> devices = device_set_->devices();
+    std::string cpu_device_name = "";
+    for (auto iter = devices.begin(); iter != devices.end(); iter++) {
+      if ((*iter)->device_type() == "CPU") {
+        cpu_device_name = (*iter)->name();
+        break;
+      }
+    }
+
     std::map<std::string, Node*>::iterator it;
     for (it = stage_node_map.begin(); it != stage_node_map.end(); ++it) {
       if (unstage_node_map.find(it->first) != unstage_node_map.end()) {
-        StageGraph(staged_graph.get(), it->second, unstage_node_map[it->first], target_nodes);
+        StageGraph(staged_graph.get(), it->second, unstage_node_map[it->first], 
+                   target_nodes, do_smart_stage_gpu, cpu_device_name);
+      }
+    }
+
+    // place TensorBufferCancel op and TensorBufferClose on CPU
+    // when enable optimization for smartstage on GPU.
+    if (do_smart_stage_gpu) {
+      for (Node *n : staged_graph.get()->op_nodes()) {
+	if (n->type_string() == "TensorBufferCancel" ||
+	    n->type_string() == "TensorBufferClose") {
+	  n->set_assigned_device_name(cpu_device_name);
+	}
       }
     }
     g->swap(staged_graph);
@@ -699,8 +723,22 @@ Status GraphExecutionState::InitBaseGraph(std::unique_ptr<Graph>&& new_graph) {
   TF_RETURN_IF_ERROR(OptimizationPassRegistry::Global()->RunGrouping(
       OptimizationPassRegistry::PRE_PLACEMENT, optimization_options));
 
+  // Assigned per gpu device to a session when use multi-stream in SessionGroup mode.
+  // The device name is listed in config.per_session_devices.
+  Device* default_local_device = nullptr;
+  if (session_options_->config.per_session_devices_size() > 0) {
+    const auto& dname = session_options_->config.per_session_devices(0);
+    for (auto& d : device_set_->devices()) {
+      if (d->name() == dname) {
+        default_local_device = d;
+        LOG(INFO) << "Assign " << d->name() << " to a session in session group.";
+        break;
+      }
+    }
+  }
+
   Placer placer(new_graph.get(), "", flib_def_.get(), device_set_,
-                /* default_local_device= */ nullptr,
+                default_local_device,
                 session_options_ == nullptr ||
                     session_options_->config.allow_soft_placement(),
                 session_options_ != nullptr &&
@@ -722,7 +760,8 @@ Status GraphExecutionState::InitBaseGraph(std::unique_ptr<Graph>&& new_graph) {
     PipelineGraph(&new_graph, micro_batch_num);
   }
 
-  if (session_optimizer_options.do_smart_stage()) {
+  if (session_optimizer_options.do_smart_stage() ||
+      session_optimizer_options.do_smart_stage_gpu()) {
     VLOG(2) << "RUN Graph Optimization: SmartStage";
     std::string tn;
     ReadStringFromEnvVar("TARGET_NODES_NAME", "", &tn);
@@ -730,7 +769,8 @@ Status GraphExecutionState::InitBaseGraph(std::unique_ptr<Graph>&& new_graph) {
     for (std::string s : str_util::Split(tn, ';')) {
       target_nodes.push_back(s.substr(0, s.find_last_of(':')));
     }
-    SmartStageGraph(&new_graph, target_nodes);
+    SmartStageGraph(&new_graph, target_nodes, 
+                    session_optimizer_options.do_smart_stage_gpu());
   }
 
   SaveStatefulNodes(new_graph.get());

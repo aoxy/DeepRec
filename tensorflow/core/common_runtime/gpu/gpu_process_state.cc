@@ -121,14 +121,27 @@ Allocator* GPUProcessState::GetGPUAllocator(const GPUOptions& options,
     while (bus_id >= gpu_visitors_.size()) {
       gpu_visitors_.push_back({});
     }
-    se::StreamExecutor* stream_exec =
-        GpuIdUtil::ExecutorForPlatformGpuId(platform_gpu_id).ValueOrDie();
-    GPUMemAllocator* sub_allocator = new GPUMemAllocator(
-        stream_exec,
-        platform_gpu_id,
-        (options.per_process_gpu_memory_fraction() > 1.0 ||
-         options.experimental().use_unified_memory()),
-        gpu_visitors_[bus_id], {});
+
+    bool use_mps = GpuIdUtil::EnableMPS();
+    se::StreamExecutor* stream_exec = nullptr;
+    GPUMemAllocator* sub_allocator = nullptr;
+    if (use_mps) {
+      stream_exec = GpuIdUtil::ExecutorForTfGpuId(platform_gpu_id, tf_gpu_id).ValueOrDie();
+      sub_allocator = new GPUMemAllocator(
+          stream_exec,
+          tf_gpu_id,
+          (options.per_process_gpu_memory_fraction() > 1.0 ||
+          options.experimental().use_unified_memory()),
+          gpu_visitors_[bus_id], {});
+    } else {
+      stream_exec = GpuIdUtil::ExecutorForPlatformGpuId(platform_gpu_id).ValueOrDie();
+      sub_allocator = new GPUMemAllocator(
+          stream_exec,
+          platform_gpu_id,
+          (options.per_process_gpu_memory_fraction() > 1.0 ||
+          options.experimental().use_unified_memory()),
+          gpu_visitors_[bus_id], {});
+    }
     Allocator* gpu_allocator = nullptr;
     GPUBFCAllocator* gpu_bfc_allocator = nullptr;
     if (useTensorPoolAllocator()) {
@@ -171,10 +184,13 @@ Allocator* GPUProcessState::GetGPUAllocator(const GPUOptions& options,
       // **WARNING** probably will not work in a multi-gpu scenario
       gpu_allocator =
           new GPUcudaMallocAllocator(gpu_allocator, platform_gpu_id);
-    } else if (useCudaMallocAsyncAllocator()) {
-      LOG(INFO) << "Using CUDA malloc Async allocator for GPU: " << platform_gpu_id;
-      // If true, passes all allocation requests through to cudaMallocAsync.
-      // Useful for doing memory debugging with tools like compute-sanitizer.
+    } else if (useCudaMallocAsyncAllocator() ||
+               options.experimental().use_cuda_malloc_async()) {
+      LOG(INFO) << "Using CUDA malloc Async allocator for GPU: "
+                << platform_gpu_id;
+      // If true, passes all allocation requests through to cudaMallocAsync
+      // TODO: useful for doing memory debugging with tools like
+      // compute-sanitizer.
       // TODO: **WARNING** probably will not work in a multi-gpu scenario
       gpu_allocator =
           new GpuCudaMallocAsyncAllocator(platform_gpu_id, total_bytes);

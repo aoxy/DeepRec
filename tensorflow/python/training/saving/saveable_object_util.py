@@ -130,7 +130,10 @@ class ResourceVariableSaveable(saveable_object.SaveableObject):
     self._full_name = full_name
     variable = ops.get_default_graph().get_variale_by_name(full_name or name)
     if variable is not None:
-      self.is_sparse = variable._is_sparse
+      if hasattr(variable, '_is_sparse'):
+        self.is_sparse = variable._is_sparse
+      elif hasattr(variable, 'values'):  # DistributedVariable
+        self.is_sparse = variable.values[0]._is_sparse
 
   def restore(self, restored_tensors, restored_shapes):
     restored_tensor = restored_tensors[0]
@@ -169,19 +172,28 @@ class EmbeddingVariableSaveable(saveable_object.SaveableObject):
           return array_ops.identity(x)
       return f
     #unused_tensor = _read_variable_closure(var)
-    unused_tensor = var.handle
+    unused_tensor = kv_variable_ops.identity(var)
 
     specs = []
-    specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-keys", dtype=self.key_type, device=var.device))
-    specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-values", dtype=dtypes.float32, device=var.device))
-    specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-versions", dtype=dtypes.int64, device=var.device))
-    specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-freqs", dtype=dtypes.int64, device=var.device))
+    if isinstance(unused_tensor, list):
+      specs.append(saveable_object.SaveSpec(unused_tensor[0], "", name + "-keys", dtype=self.key_type, device=unused_tensor[0].device))
+      specs.append(saveable_object.SaveSpec(unused_tensor[1], "", name + "-values", dtype=self.dtype, device=unused_tensor[1].device))
+      specs.append(saveable_object.SaveSpec(unused_tensor[2], "", name + "-versions", dtype=dtypes.int64, device=unused_tensor[2].device))
+      specs.append(saveable_object.SaveSpec(unused_tensor[3], "", name + "-freqs", dtype=dtypes.int64, device=unused_tensor[3].device))
+      specs.append(saveable_object.SaveSpec(unused_tensor[4], "", name + "-partition_offset", dtype=dtypes.int32, device=unused_tensor[4].device))
+    else:
+      specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-keys", dtype=self.key_type, device=var.device))
+      specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-values", dtype=dtypes.float32, device=var.device))
+      specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-versions", dtype=dtypes.int64, device=var.device))
+      specs.append(saveable_object.SaveSpec(unused_tensor, "", name + "-freqs", dtype=dtypes.int64, device=var.device))
+
     # pylint: disable=protected-access
     super(EmbeddingVariableSaveable, self).__init__(var, specs, name)
     self.is_sparse = var._is_sparse
 
   def restore(self, restored_tensors, unused_restored_shapes):
     # pylint: disable=protected-access
+    name_tensor = ops.convert_to_tensor(self.name)
     with ops.colocate_with(self.handle_op):
       handle_name = ops.name_from_scope_name(self.name)
       is_partitioned_ev = not isinstance(self.var._save_slice_info, str)
@@ -193,7 +205,7 @@ class EmbeddingVariableSaveable(saveable_object.SaveableObject):
             restored_tensors[0],
             self.handle_op, self.var._primary_handle,
             variables._try_guard_against_uninitialized_dependencies(self.name, self.op.initial_value),
-            self.name,
+            name_tensor,
             ops.convert_to_tensor(self.invalid_key),
             slot_num=self.var._slot_num,
             shape=self.op.initial_value.get_shape()[rank:], steps_to_live=self.steps_to_live,
@@ -207,19 +219,23 @@ class EmbeddingVariableSaveable(saveable_object.SaveableObject):
             max_element_size = self.var._max_element_size,
             false_positive_probability = self.var._false_positive_probability,
             counter_type = self.var._counter_type,
-            layout = self.var._layout,
+            layout = "",
             storage_type=self.var._storage_type,
             storage_path=self.var._storage_path,
             storage_size=self.var._storage_size,
             partition_id=self.partition_id, partition_num=self.partition_num,
-            default_value_dim=self.var._default_value_dim)
+            default_value_dim=self.var._default_value_dim,
+            default_value_no_permission=self.var._default_value_no_permission,
+            record_freq=self.var._record_freq,
+            record_version=self.var._record_version)
 
   def incr_restore(self, restored_tensors, unused_restored_shapes):
     # pylint: disable=protected-access
+    name_tensor = ops.convert_to_tensor(self.name)
     with ops.colocate_with(self.handle_op):
       handle_name = ops.name_from_scope_name(self.name)
       return gen_kv_variable_ops.kv_resource_incr_import(
-              restored_tensors[0], self.handle_op, self.name,
+              restored_tensors[0], self.handle_op, name_tensor,
               ops.convert_to_tensor(self.invalid_key),
               variables._try_guard_against_uninitialized_dependencies(self.name, self.op.initial_value),
               partition_id=self.partition_id, partition_num=self.partition_num)

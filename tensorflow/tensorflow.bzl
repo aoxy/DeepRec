@@ -240,8 +240,8 @@ def if_override_eigen_strong_inline(a):
 
 def if_nccl(if_true, if_false = []):
     return select({
-        "//tensorflow:no_nccl_support": if_false,
-        "//tensorflow:windows": if_false,
+        clean_dep("//tensorflow:no_nccl_support"): if_false,
+        clean_dep("//tensorflow:windows"): if_false,
         "//conditions:default": if_true,
     })
 
@@ -294,9 +294,9 @@ def tf_copts(
         if_cuda(["-DGOOGLE_CUDA=1"]) +
         if_tensorrt(["-DGOOGLE_TENSORRT=1"]) +
         if_nccl(["-DGOOGLE_NCCL=1"]) +
-        if_mkl(["-DINTEL_MKL=1", "-DENABLE_MKLDNN_V1", "-DENABLE_INTEL_MKL_BFLOAT16"]) +
+        if_mkl(["-DINTEL_MKL=1"]) +
         if_mkl_open_source_only(["-DINTEL_MKL_DNN_ONLY"]) +
-        if_mkldnn_threadpool(["-DENABLE_MKLDNN_THREADPOOL"]) +
+        if_mkldnn_threadpool(["-DENABLE_DNNL_THREADPOOL"]) +
         if_enable_mkl(["-DENABLE_MKL"]) +
         if_ngraph(["-DINTEL_NGRAPH=1"]) +
         if_android_arm(["-mfpu=neon"]) +
@@ -1392,6 +1392,24 @@ register_extension_info(
     extension_name = "tf_cuda_library",
     label_regex_for_dep = "{extension_name}",
 )
+
+def if_cuda_clang_opt(if_true, if_false = []):
+   """Shorthand for select()'ing on wheteher we're building with cuda-clang
+   in opt mode.
+
+    Returns a select statement which evaluates to if_true if we're building
+    with cuda-clang in opt mode. Otherwise, the select statement evaluates to
+    if_false.
+
+   """
+   return select({
+       "@local_config_cuda//cuda:using_clang_opt": if_true,
+       "//conditions:default": if_false
+   })
+
+def cuda_library(copts = [], **kwargs):
+    """Wrapper over cc_library which adds default CUDA options."""
+    native.cc_library(copts = cuda_default_copts() + copts, **kwargs)
 
 def tf_kernel_library(
         name,

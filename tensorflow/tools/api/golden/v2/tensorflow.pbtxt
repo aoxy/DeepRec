@@ -625,26 +625,6 @@ tf_module {
     argspec: "args=[\'f\'], varargs=None, keywords=None, defaults=None"
   }
   member_method {
-    name: "data_buffer_cancel"
-    argspec: "args=[\'container\', \'is_cancelled\', \'shared_name\', \'shared_capacity\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'True\', \'\', \'1\', \'None\'], "
-  }
-  member_method {
-    name: "data_buffer_close"
-    argspec: "args=[\'container\', \'shared_name\', \'shared_capacity\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'None\'], "
-  }
-  member_method {
-    name: "data_buffer_put"
-    argspec: "args=[\'record\', \'container\', \'shared_name\', \'shared_capacity\', \'timeout_millis\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'1000\', \'None\'], "
-  }
-  member_method {
-    name: "data_buffer_size"
-    argspec: "args=[\'container\', \'shared_name\', \'shared_capacity\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'None\'], "
-  }
-  member_method {
-    name: "data_buffer_take"
-    argspec: "args=[\'dtypes\', \'container\', \'shared_name\', \'shared_capacity\', \'shared_threads\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'1\', \'None\'], "
-  }
-  member_method {
     name: "decode_dense"
     argspec: "args=[\'values\', \'dtype\', \'name\'], varargs=None, keywords=None, defaults=[\"<dtype: \'float32\'>\", \'None\'], "
   }
@@ -753,6 +733,10 @@ tf_module {
     argspec: "args=[\'func\', \'input_signature\', \'autograph\', \'experimental_autograph_options\', \'experimental_relax_shapes\', \'experimental_compile\'], varargs=None, keywords=None, defaults=[\'None\', \'None\', \'True\', \'None\', \'False\', \'None\'], "
   }
   member_method {
+    name: "fused_concat_cast"
+    argspec: "args=[\'values\', \'axis\', \'DstT\', \'Truncate\', \'name\'], varargs=None, keywords=None, defaults=[\'False\', \'None\'], "
+  }
+  member_method {
     name: "fused_embedding_local_sparse_look_up"
     argspec: "args=[\'sp_values\', \'sp_indices\', \'sp_dense_shape\', \'emb_variable\', \'combiner\', \'max_norm\', \'name\'], varargs=None, keywords=None, defaults=[\'-1\', \'None\'], "
   }
@@ -770,7 +754,23 @@ tf_module {
   }
   member_method {
     name: "fused_embedding_sparse_pre_look_up"
-    argspec: "args=[\'partition_shapes\', \'sp_values\', \'sp_indices\', \'sp_dense_shape\', \'partition_axis\', \'fill_empty_row\', \'prune_invalid_id\', \'default_id\', \'name\'], varargs=None, keywords=None, defaults=[\'0\', \'False\', \'False\', \'-1\', \'None\'], "
+    argspec: "args=[\'partition_shapes\', \'sp_values\', \'sp_indices\', \'sp_dense_shape\', \'partition_axis\', \'fill_empty_row\', \'prune_invalid_id\', \'default_id\', \'partition_strategy\', \'name\'], varargs=None, keywords=None, defaults=[\'0\', \'False\', \'False\', \'-1\', \'div\', \'None\'], "
+  }
+  member_method {
+    name: "fused_l2_normalize"
+    argspec: "args=[\'x\', \'axis\', \'epsilon\', \'name\'], varargs=None, keywords=None, defaults=[\'1\', \'1e-12\', \'None\'], "
+  }
+  member_method {
+    name: "fused_l2_normalize_grad"
+    argspec: "args=[\'y_grad\', \'x\', \'axis\', \'epsilon\', \'name\'], varargs=None, keywords=None, defaults=[\'1\', \'1e-12\', \'None\'], "
+  }
+  member_method {
+    name: "fused_safe_embedding_lookup_sparse_local"
+    argspec: "args=[\'weight\', \'id_input\', \'dense_shape\', \'indice\', \'weight_input\', \'combiner\', \'prune\', \'max_norm\', \'default_id\', \'partition_strategy\', \'T\', \'name\'], varargs=None, keywords=None, defaults=[\'mean\', \'True\', \'-1\', \'-1\', \'div\', \"<dtype: \'float32\'>\", \'None\'], "
+  }
+  member_method {
+    name: "fused_safe_embedding_lookup_sparse_local_grad"
+    argspec: "args=[\'gradients\', \'input\', \'indices\', \'dense_shape\', \'combiner\', \'name\'], varargs=None, keywords=None, defaults=[\'mean\', \'None\'], "
   }
   member_method {
     name: "gather"
@@ -906,7 +906,7 @@ tf_module {
   }
   member_method {
     name: "initialize_kv_variable_op"
-    argspec: "args=[\'resource_self\', \'resource_primary\', \'value\', \'empty_key\', \'slotnum\', \'shape\', \'counter_type\', \'initial_num_buckets\', \'max_load_factor\', \'steps_to_live\', \'ht_type\', \'emb_index\', \'block_num\', \'slot_index\', \'ht_partition_num\', \'filter_freq\', \'max_freq\', \'max_element_size\', \'false_positive_probability\', \'l2_weight_threshold\', \'layout\', \'storage_type\', \'storage_path\', \'storage_size\', \'default_value_dim\', \'name\'], varargs=None, keywords=None, defaults=[\'131072\', \'0.8\', \'0\', \'\', \'0\', \'1\', \'0\', \'1000\', \'0\', \'999999\', \'0\', \'-1\', \'-1\', \'normal\', \'1\', \'.\', \'0\', \'4096\', \'None\'], "
+    argspec: "args=[\'resource_self\', \'resource_primary\', \'value\', \'empty_key\', \'shape\', \'counter_type\', \'slot_num\', \'initial_num_buckets\', \'max_load_factor\', \'steps_to_live\', \'ht_type\', \'emb_index\', \'block_num\', \'slot_index\', \'ht_partition_num\', \'filter_freq\', \'max_freq\', \'max_element_size\', \'false_positive_probability\', \'l2_weight_threshold\', \'layout\', \'storage_type\', \'storage_path\', \'storage_size\', \'default_value_dim\', \'record_freq\', \'record_version\', \'name\'], varargs=None, keywords=None, defaults=[\'0\', \'131072\', \'0.8\', \'0\', \'\', \'0\', \'1\', \'0\', \'1000\', \'0\', \'999999\', \'0\', \'-1\', \'-1\', \'normal\', \'1\', \'.\', \'[]\', \'4096\', \'False\', \'False\', \'None\'], "
   }
   member_method {
     name: "io_kafka_dataset"
@@ -970,7 +970,11 @@ tf_module {
   }
   member_method {
     name: "kv_resource_gather_v1"
-    argspec: "args=[\'resource\', \'indices\', \'default_value\', \'counts\', \'validate_indices\', \'name\'], varargs=None, keywords=None, defaults=[\'True\', \'None\'], "
+    argspec: "args=[\'resource\', \'indices\', \'default_value\', \'counts\', \'validate_indices\', \'is_use_default_value_tensor\', \'name\'], varargs=None, keywords=None, defaults=[\'True\', \'False\', \'None\'], "
+  }
+  member_method {
+    name: "kv_resource_generate_partitioned_tensor"
+    argspec: "args=[\'keys\', \'values\', \'versions\', \'freqs\', \'name\'], varargs=None, keywords=None, defaults=[\'None\'], "
   }
   member_method {
     name: "kv_resource_import"
@@ -978,7 +982,7 @@ tf_module {
   }
   member_method {
     name: "kv_resource_import_v2"
-    argspec: "args=[\'prefix\', \'resource_self\', \'resource_primary\', \'value\', \'tensor_names\', \'empty_key\', \'slotnum\', \'shape\', \'counter_type\', \'emb_index\', \'slot_index\', \'slot_num\', \'block_num\', \'steps_to_live\', \'partition_id\', \'partition_num\', \'ht_type\', \'filter_freq\', \'ht_partition_num\', \'max_element_size\', \'false_positive_probability\', \'l2_weight_threshold\', \'layout\', \'max_freq\', \'storage_type\', \'storage_path\', \'storage_size\', \'default_value_dim\', \'name\'], varargs=None, keywords=None, defaults=[\'0\', \'0\', \'0\', \'1\', \'0\', \'0\', \'1\', \'\', \'0\', \'1000\', \'0\', \'-1\', \'-1\', \'normal\', \'999999\', \'1\', \'.\', \'0\', \'4096\', \'None\'], "
+    argspec: "args=[\'prefix\', \'resource_self\', \'resource_primary\', \'value\', \'tensor_names\', \'empty_key\', \'shape\', \'counter_type\', \'slot_num\', \'emb_index\', \'slot_index\', \'block_num\', \'steps_to_live\', \'partition_id\', \'partition_num\', \'ht_type\', \'filter_freq\', \'ht_partition_num\', \'max_element_size\', \'false_positive_probability\', \'l2_weight_threshold\', \'layout\', \'max_freq\', \'storage_type\', \'storage_path\', \'storage_size\', \'default_value_dim\', \'record_freq\', \'record_version\', \'name\'], varargs=None, keywords=None, defaults=[\'0\', \'0\', \'0\', \'1\', \'0\', \'0\', \'1\', \'\', \'0\', \'1000\', \'0\', \'-1\', \'-1\', \'normal\', \'999999\', \'1\', \'.\', \'[]\', \'4096\', \'False\', \'False\', \'None\'], "
   }
   member_method {
     name: "kv_resource_incr_import"
@@ -1003,6 +1007,10 @@ tf_module {
   member_method {
     name: "kv_resource_sparse_apply_adam_async"
     argspec: "args=[\'var\', \'m\', \'v\', \'beta1_power\', \'beta2_power\', \'lr\', \'beta1\', \'beta2\', \'epsilon\', \'grad\', \'indices\', \'global_step\', \'use_locking\', \'apply_sparse_rmsprop\', \'name\'], varargs=None, keywords=None, defaults=[\'False\', \'False\', \'None\'], "
+  }
+  member_method {
+    name: "kv_resource_sparse_apply_adam_w"
+    argspec: "args=[\'var\', \'m\', \'v\', \'beta1_power\', \'beta2_power\', \'lr\', \'beta1\', \'beta2\', \'epsilon\', \'grad\', \'indices\', \'global_step\', \'weight_decay\', \'use_locking\', \'name\'], varargs=None, keywords=None, defaults=[\'False\', \'None\'], "
   }
   member_method {
     name: "kv_resource_sparse_apply_ftrl"
@@ -1147,6 +1155,10 @@ tf_module {
   member_method {
     name: "parallel_stack"
     argspec: "args=[\'values\', \'name\'], varargs=None, keywords=None, defaults=[\'parallel_stack\'], "
+  }
+  member_method {
+    name: "parquet_tabular_dataset_v1"
+    argspec: "args=[\'filename\', \'batch_size\', \'field_names\', \'field_dtypes\', \'field_ragged_ranks\', \'partition_count\', \'partition_index\', \'drop_remainder\', \'name\'], varargs=None, keywords=None, defaults=[\'1\', \'0\', \'False\', \'None\'], "
   }
   member_method {
     name: "pow"
@@ -1519,6 +1531,26 @@ tf_module {
   member_method {
     name: "tensible_variable_scatter_update"
     argspec: "args=[\'resource\', \'indices\', \'updates\', \'name\'], varargs=None, keywords=None, defaults=[\'None\'], "
+  }
+  member_method {
+    name: "tensor_buffer_cancel"
+    argspec: "args=[\'container\', \'is_cancelled\', \'shared_name\', \'shared_capacity\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'True\', \'\', \'1\', \'None\'], "
+  }
+  member_method {
+    name: "tensor_buffer_close"
+    argspec: "args=[\'container\', \'shared_name\', \'shared_capacity\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'None\'], "
+  }
+  member_method {
+    name: "tensor_buffer_put"
+    argspec: "args=[\'record\', \'container\', \'shared_name\', \'shared_capacity\', \'timeout_millis\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'1000\', \'None\'], "
+  }
+  member_method {
+    name: "tensor_buffer_size"
+    argspec: "args=[\'container\', \'shared_name\', \'shared_capacity\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'None\'], "
+  }
+  member_method {
+    name: "tensor_buffer_take"
+    argspec: "args=[\'dtypes\', \'container\', \'shared_name\', \'shared_capacity\', \'shared_threads\', \'name\'], varargs=None, keywords=None, defaults=[\'\', \'\', \'1\', \'1\', \'None\'], "
   }
   member_method {
     name: "tensor_scatter_nd_add"

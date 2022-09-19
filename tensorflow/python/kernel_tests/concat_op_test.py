@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import numpy as np
 
+from tensorflow.python.eager import def_function
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import errors_impl
@@ -558,6 +559,17 @@ class ConcatOpTest(test.TestCase):
         t2 = [2]
         gen_array_ops.concat_v2([t1, t2], 1).eval()
 
+  def testConcatInvalidAxisInTfFunction(self):
+
+    @def_function.function
+    def concat_wrapper():
+      y = gen_array_ops.concat_v2(
+          values=[[1, 2, 3], [4, 5, 6]], axis=0xb500005b)
+      return y
+
+    with self.assertRaises(ValueError):
+      concat_wrapper()
+
   def testConcatNegativeAxis(self):
     with test_util.use_gpu():
       t1 = [[1, 2, 3], [4, 5, 6]]
@@ -716,7 +728,7 @@ class ConcatOffsetTest(test.TestCase):
       self.assertAllEqual(ans, [[0, 0, 0], [2, 0, 0], [3, 0, 0]])
 
   def testCreateMemDecBlockedFormat(self):
-    """Try to create the mkl concat operation
+    """Try to create the OneDNN concat operation
 
     when one of the input's memory descriptor is in blocked format
     """

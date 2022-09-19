@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_PUBLIC_SESSION_H_
 #define TENSORFLOW_CORE_PUBLIC_SESSION_H_
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@ limitations under the License.
 
 namespace tensorflow {
 class DeviceMgr;
+class ResourceMgr;
 
 namespace thread {
 
@@ -267,6 +269,32 @@ class Session {
   }
 };
 
+// Define SessionGroup Interface
+class SessionGroup {
+ public:
+  virtual ~SessionGroup() {}
+  virtual Status Close() = 0;
+  virtual int32_t GetSessionNum() const = 0;
+  virtual Status CreateLeaderSession(Session* leader_session) = 0;
+  virtual Status CreateFollowerSession(Session* follower_session) = 0;
+  virtual Session* GetLeaderSession() = 0;
+  virtual Status Create(const GraphDef& graph) = 0;
+  virtual Status Run(
+      const std::vector<std::pair<string, Tensor> >& inputs,
+      const std::vector<string>& output_tensor_names,
+      const std::vector<string>& target_node_names,
+      std::vector<Tensor>* outputs, int32_t session_id = -1) = 0;
+  virtual Status Run(
+      const RunOptions& run_options,
+      const std::vector<std::pair<string, Tensor> >& inputs,
+      const std::vector<string>& output_tensor_names,
+      const std::vector<string>& target_node_names,
+      std::vector<Tensor>* outputs, RunMetadata* run_metadata,
+      int32_t session_id = -1) = 0;
+  virtual Session* GetSession(int32_t hint_id = -1) = 0;
+  virtual std::unique_ptr<Session>* GetSessionPtr(int id) = 0;
+};
+
 /// \brief Create a new session with the given options.
 ///
 /// If session creation succeeds, the new `Session` will be stored in
@@ -274,6 +302,10 @@ class Session {
 /// `*out_session`, and this function will return `OK()`. Otherwise, this
 /// function will return an error status and set *out_session to nullptr.
 Status NewSession(const SessionOptions& options, Session** out_session);
+
+Status NewSessionGroup(const SessionOptions& options,
+                       SessionGroup** out_session_group,
+                       int session_num = 1);
 
 /// \brief Resets resource containers associated with a target.
 ///

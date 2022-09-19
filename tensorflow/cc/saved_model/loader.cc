@@ -22,6 +22,7 @@ limitations under the License.
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/function.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
+#include "tensorflow/core/framework/op_def.pb.h"
 #include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/graph/default_device.h"
 #include "tensorflow/core/grappler/utils.h"
@@ -95,6 +96,19 @@ static Status ValidateNode(const NodeDef& node) {
   return Status::OK();
 }
 
+static Status ValidateFunctionNotRecursive(const FunctionDef& function) {
+  const auto& function_name = function.signature().name();
+  for (const auto& node : function.node_def()) {
+    if (node.op() == function_name) {
+      return errors::FailedPrecondition(
+          "Function ", function_name,
+          " is self recursive and TensorFlow does not support this scenario.");
+    }
+  }
+
+  return Status::OK();
+}
+
 static Status ValidateSavedTensors(const GraphDef& graph_def) {
   for (const auto& node : graph_def.node()) {
     TF_RETURN_IF_ERROR(ValidateNode(node));
@@ -106,6 +120,10 @@ static Status ValidateSavedTensors(const GraphDef& graph_def) {
       for (const auto& node : function.node_def()) {
 	TF_RETURN_IF_ERROR(ValidateNode(node));
       }
+
+      // Also check that there is no recursivity in the library
+      // TODO(mihaimaruseac): Do more than self-recursivity
+      TF_RETURN_IF_ERROR(ValidateFunctionNotRecursive(function));
     }
   }
 
@@ -120,6 +138,20 @@ Status LoadMetaGraphIntoSession(const MetaGraphDef& meta_graph_def,
   session->reset(session_p);
   TF_RETURN_IF_ERROR(ValidateSavedTensors(meta_graph_def.graph_def()));
   return (*session)->Create(meta_graph_def.graph_def());
+}
+
+Status LoadMetaGraphIntoSessionGroup(const MetaGraphDef& meta_graph_def,
+                                     const SessionGroupOptions& session_options,
+                                     std::unique_ptr<SessionGroup>* session_group) {
+  SessionGroup* sg = nullptr;
+  SessionOptions opt;
+  opt.env = session_options.env;
+  opt.target = session_options.target;
+  opt.config = session_options.config;
+  TF_RETURN_IF_ERROR(NewSessionGroup(opt, &sg, session_options.session_num));
+  session_group->reset(sg);
+  TF_RETURN_IF_ERROR(ValidateSavedTensors(meta_graph_def.graph_def()));
+  return (*session_group)->Create(meta_graph_def.graph_def());
 }
 
 Tensor CreateStringTensor(const string& value) {
@@ -217,9 +249,14 @@ Status GetInitOp(const string& export_dir, const MetaGraphDef& meta_graph_def,
   const auto& init_op_sig_it =
       meta_graph_def.signature_def().find(kSavedModelInitOpSignatureKey);
   if (init_op_sig_it != sig_def_map.end()) {
-    *init_op_name = init_op_sig_it->second.outputs()
-                        .find(kSavedModelInitOpSignatureKey)
-                        ->second.name();
+    const auto& sig_def_outputs = init_op_sig_it->second.outputs();
+    const auto& sig_def_outputs_it =
+        sig_def_outputs.find(kSavedModelInitOpSignatureKey);
+    if (sig_def_outputs_it == sig_def_outputs.end()) {
+      return errors::FailedPrecondition("Could not find output ",
+                                        kSavedModelInitOpSignatureKey);
+    }
+    *init_op_name = sig_def_outputs_it->second.name();
     return Status::OK();
   }
 
@@ -336,7 +373,6 @@ Status LoadSavedModelInternal(const SessionOptions& session_options,
   TF_RETURN_IF_ERROR(LoadMetaGraphIntoSession(
       bundle->meta_graph_def, lsession_options, &bundle->session));
 
-
   std::vector<AssetFileDef> asset_file_defs;
   TF_RETURN_IF_ERROR(
       GetAssetFileDefs(bundle->meta_graph_def, &asset_file_defs));
@@ -365,16 +401,68 @@ Status LoadSavedModelInternal(const SessionOptions& session_options,
   return Status::OK();
 }
 
-}  // namespace
+Status LoadSavedModelInternal(const SessionGroupOptions& session_options,
+                              const RunOptions& run_options,
+                              const string& export_dir,
+                              const std::unordered_set<string>& tags,
+                              SavedModelBundleV2* const bundle) {
+  const uint64 read_start_microseconds = Env::Default()->NowMicros();
+  TF_RETURN_IF_ERROR(ReadMetaGraphDefFromSavedModel(export_dir, tags,
+                                                    &bundle->meta_graph_def));
+  
+  // If allocator starts with a '/' then it is being used to
+  // communicate the CPU/GPU that the graph runs on.
+  SessionGroupOptions lsession_options = session_options;
+  const std::string& alloc_type =
+    lsession_options.config.gpu_options().allocator_type();
+  if (!alloc_type.empty() && (alloc_type[0] == '/')) {
+    // Clear the device field from the graphdef so that the default device
+    // setting below will control which GPU the graph will run on.
+    for (tensorflow::NodeDef& node :
+      *bundle->meta_graph_def.mutable_graph_def()->mutable_node()) {
+      if (!tensorflow::grappler::NodeIsOnCpu(&node)) {
+        node.clear_device();
+      }
+    }
+    graph::SetDefaultDevice(alloc_type, bundle->meta_graph_def.mutable_graph_def());
+    lsession_options.config.mutable_gpu_options()->clear_allocator_type();
+  }
 
-Status LoadSavedModel(const SessionOptions& session_options,
-                      const RunOptions& run_options, const string& export_dir,
-                      const std::unordered_set<string>& tags,
-                      SavedModelBundle* const bundle) {
-  // TODO(robson): Add tests for the counters.
-  const uint64 start_microseconds = Env::Default()->NowMicros();
-  const Status status = LoadSavedModelInternal(session_options, run_options,
-                                               export_dir, tags, bundle);
+  TF_RETURN_IF_ERROR(LoadMetaGraphIntoSessionGroup(
+      bundle->meta_graph_def, lsession_options,
+      &bundle->session_group));
+
+  std::vector<AssetFileDef> asset_file_defs;
+  TF_RETURN_IF_ERROR(
+      GetAssetFileDefs(bundle->meta_graph_def, &asset_file_defs));
+  TF_RETURN_IF_ERROR(
+      RunRestore(run_options, export_dir,
+                 bundle->meta_graph_def.saver_def().restore_op_name(),
+                 bundle->meta_graph_def.saver_def().filename_tensor_name(),
+                 asset_file_defs, bundle->session_group->GetLeaderSession()));
+  // Record walltime spent in restoring graph from disk, but postpone metric
+  // increments until graph init finishes.
+  const uint64 restore_graph_walltime =
+      GetLatencyMicroseconds(read_start_microseconds);
+
+  const uint64 graph_init_start_microseconds = Env::Default()->NowMicros();
+  string init_op_name;
+  TF_RETURN_IF_ERROR(
+      GetInitOp(export_dir, bundle->meta_graph_def, &init_op_name));
+  TF_RETURN_IF_ERROR(RunInitOp(run_options, export_dir, bundle->meta_graph_def,
+                               asset_file_defs, bundle->session_group->GetLeaderSession(),
+                               init_op_name));
+  load_latency_by_stage->GetCell(export_dir, "restore_graph")
+      ->Add(restore_graph_walltime);
+  // Record wall time spent in init op.
+  load_latency_by_stage->GetCell(export_dir, "init_graph")
+      ->Add(GetLatencyMicroseconds(graph_init_start_microseconds));
+  return Status::OK();
+}
+
+Status LogAndCount(const Status& status, const uint64 start_microseconds,
+                   const std::unordered_set<string>& tags,
+                   const string& export_dir) {
   auto log_and_count = [&](const string& status_str) {
     LOG(INFO) << "SavedModel load for tags { " << absl::StrJoin(tags, " ")
               << " }; Status: " << status_str << ". Took "
@@ -389,6 +477,30 @@ Status LoadSavedModel(const SessionOptions& session_options,
   load_latency->GetCell(export_dir)
       ->IncrementBy(GetLatencyMicroseconds(start_microseconds));
   return status;
+}
+
+}  // namespace
+
+Status LoadSavedModel(const SessionOptions& session_options,
+                      const RunOptions& run_options, const string& export_dir,
+                      const std::unordered_set<string>& tags,
+                      SavedModelBundle* const bundle) {
+  // TODO(robson): Add tests for the counters.
+  const uint64 start_microseconds = Env::Default()->NowMicros();
+  const Status status = LoadSavedModelInternal(session_options, run_options,
+                                               export_dir, tags, bundle);
+  return LogAndCount(status, start_microseconds, tags, export_dir);
+}
+
+Status LoadSavedModel(const SessionGroupOptions& session_options,
+                      const RunOptions& run_options, const string& export_dir,
+                      const std::unordered_set<string>& tags,
+                      SavedModelBundleV2* const bundle) {
+  // TODO(robson): Add tests for the counters.
+  const uint64 start_microseconds = Env::Default()->NowMicros();
+  const Status status = LoadSavedModelInternal(session_options, run_options,
+                                               export_dir, tags, bundle);
+  return LogAndCount(status, start_microseconds, tags, export_dir);
 }
 
 bool MaybeSavedModelDirectory(const string& export_dir) {

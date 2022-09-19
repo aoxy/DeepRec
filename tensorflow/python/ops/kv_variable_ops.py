@@ -20,6 +20,7 @@ from __future__ import division
 from __future__ import print_function
 
 import json
+import os
 
 from tensorflow.core.framework import attr_value_pb2
 from tensorflow.core.framework import variable_pb2
@@ -37,6 +38,7 @@ from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import variables
 from tensorflow.python.ops import resource_variable_ops
 from tensorflow.python.util import compat
+from tensorflow.python.util import deprecation
 
 __all__ = ["EmbeddingVariable"]
 
@@ -280,34 +282,24 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
       self._false_positive_probability = -1.0
       self._counter_type = dtypes.uint64
 
-    multi_level_list = [config_pb2.StorageType.LEVELDB, config_pb2.StorageType.SSD,
+    multi_level_list = [config_pb2.StorageType.LEVELDB, config_pb2.StorageType.SSDHASH,
                         config_pb2.StorageType.DRAM_PMEM, config_pb2.StorageType.DRAM_LEVELDB,
-                        config_pb2.StorageType.DRAM_SSD, config_pb2.StorageType.HBM_DRAM,
-                        config_pb2.StorageType.DRAM_PMEM_SSD, config_pb2.StorageType.HBM_DRAM_SSD]
+                        config_pb2.StorageType.DRAM_SSDHASH, config_pb2.StorageType.HBM_DRAM,
+                        config_pb2.StorageType.DRAM_PMEM_SSDHASH, config_pb2.StorageType.HBM_DRAM_SSDHASH]
       
+    self._record_freq = (os.environ.get("TF_RECORD_FREQ", "0") == "1")
+    self._record_version = (os.environ.get("TF_RECORD_VERSION", "0") == "1")
     self._l2_weight_threshold = evconfig.l2_weight_threshold
     self._storage_type = evconfig.storage_type
     self._storage_path = evconfig.storage_path
     self._storage_size = evconfig.storage_size
     self._default_value_dim = evconfig.default_value_dim
-    if (isinstance(evconfig.filter_strategy, variables.CounterFilter)  and self._filter_freq != 0) or \
-       self._steps_to_live not in [0, None] or \
-       self._storage_type in multi_level_list:
-      if self._block_num not in [1, None] and self._storage_type in multi_level_list:
-        raise ValueError("Dynamic-dimension Embedding and Multi-level EV can't be enabled together") 
-      if self._block_num not in [1, None] or \
-          (self._filter_freq != 0 and self._storage_type not in multi_level_list):
-        self._layout = "normal"
-      else:
-        self._layout = "normal_contiguous"
-    else:
-      self._layout = "light"
+    self._default_value_no_permission = evconfig.default_value_no_permission
 
     if self._primary is None:
       self._is_primary = True
     else:
       self._is_primary = False
-    
     with ops.control_dependencies(None):
       with ops.name_scope(name, "Variable", []
                           if init_from_fn else [initial_value]) as name:
@@ -323,7 +315,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
               list=attr_value_pb2.AttrValue.ListValue(
                   s=[compat.as_bytes("loc:@%s" % handle_name)]))
           with ops.get_default_graph()._attr_scope({"_class": attr}):
-            with ops.name_scope("Initializer"), ops.device(None):
+            with ops.name_scope("Initializer"):
               initial_value = ops.convert_to_tensor(
                   initial_value(), name="initial_value", dtype=dtype)
             rank = initial_value.get_shape().rank - 1
@@ -384,7 +376,8 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
         with ops.name_scope("IsInitialized"):
           self._is_initialized_op = (
               gen_kv_variable_ops.kv_var_is_initialized_op(self._handle,
-                                                           Tkeys=self._invalid_key_type))
+                                                           Tkeys=self._invalid_key_type,
+                                                           dtype=self._dtype))
         if initial_value is not None:
           with ops.name_scope("Assign") as n, ops.colocate_with(self._handle):
             with ops.control_dependencies(None if self._is_primary else [self._primary.initializer]):
@@ -407,11 +400,14 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                     false_positive_probability = self._false_positive_probability,
                     counter_type = self._counter_type,
                     max_freq = 99999,
-                    layout = self._layout,
+                    layout = "",
                     storage_type = self._storage_type,
                     storage_path = self._storage_path,
                     storage_size = self._storage_size,
                     default_value_dim = self._default_value_dim,
+                    default_value_no_permission = self._default_value_no_permission,
+                    record_freq = self._record_freq,
+                    record_version = self._record_version,
                     name=n))
         self._graph_element = self._handle
         self._cached_value = None
@@ -513,6 +509,9 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._storage_path = self._initializer_op.get_attr("storage_path")
     self._storage_size = self._initializer_op.get_attr("storage_size")
     self._default_value_dim = self._initializer_op.get_attr("default_value_dim")
+    self._default_value_no_permission= self._initializer_op.get_attr("default_value_no_permission")
+    self._record_freq = self._initializer_op.get_attr("record_freq")
+    self._record_version = self._initializer_op.get_attr("record_version")
 
   # LINT.ThenChange(//tensorflow/python/eager/graph_callable.py)
 
@@ -613,10 +612,26 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     """The embedding dim of this variable."""
     return self._graph_shape
 
+  @deprecation.deprecated(
+    None, "total_count() have been replaced by `get_dynamic_shape()`.")
   def total_count(self):
     """The shape of this variable."""
     return gen_kv_variable_ops.kv_variable_shape(self._handle,
-		    Tkeys=self._invalid_key_type)
+               Tkeys=self._invalid_key_type,
+               dtype=self._dtype)
+
+  def get_dynamic_shape(self):
+    return self.total_count()
+
+  def get_frequency(self, ids):
+    return gen_kv_variable_ops.ev_get_frequency(self._handle,
+                                                ids,
+                                                Tvalues=self.dtype)
+
+  def get_version(self, ids):
+    return gen_kv_variable_ops.ev_get_version(self._handle,
+                                              ids,
+                                              Tvalues=self.dtype)
 
   def export(self):
     return gen_kv_variable_ops.kv_resource_export(self._handle,
@@ -896,6 +911,16 @@ class DynamicEmbeddingVariable(resource_variable_ops.ResourceVariable):
 
 def _dense_var_to_tensor(var, dtype=None, name=None, as_ref=False):
   return var._dense_var_to_tensor(dtype=dtype, name=name, as_ref=as_ref)  # pylint: disable=protected-access
+
+def identity(var):
+  if "GPU" in var.device:
+    with ops.device(var.device):
+      keys, values, versions, freqs =  gen_kv_variable_ops.kv_resource_export(var._handle, Tkeys=var._invalid_key_type, Tvalues=var.dtype)
+    part_keys, part_values, part_version, part_freqs, part_offset = \
+          gen_kv_variable_ops.kv_resource_generate_partitioned_tensor(keys, values, versions, freqs)
+    return [part_keys, part_values, part_version, part_freqs, part_offset]
+  else:
+    return var.handle
 
 
 # Register a conversion function which reads the value of the variable,

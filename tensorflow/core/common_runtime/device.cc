@@ -28,6 +28,25 @@ Device::Device(Env* env, const DeviceAttributes& device_attributes)
   CHECK(DeviceNameUtils::ParseFullName(name(), &parsed_name_))
       << "Invalid device name: " << name();
   rmgr_ = new ResourceMgr(parsed_name_.job);
+  owned_rmgr_ = true;
+}
+
+Device::Device(Env* env, const DeviceAttributes& device_attributes,
+               const DeviceResourceMgrMap* dev_rmgr_map)
+    : DeviceBase(env), device_attributes_(device_attributes) {
+  CHECK(DeviceNameUtils::ParseFullName(name(), &parsed_name_))
+      << "Invalid device name: " << name();
+
+  if (dev_rmgr_map != nullptr &&
+      dev_rmgr_map->device_rmgr_map.find(name()) !=
+          dev_rmgr_map->device_rmgr_map.end()) {
+    rmgr_ = const_cast<DeviceResourceMgrMap*>(dev_rmgr_map)->device_rmgr_map[name()];
+    LOG(INFO) << "Device " << name() << " got a shared resource_mgr: " << rmgr_;
+    owned_rmgr_ = false;
+  } else {
+    rmgr_ = new ResourceMgr(parsed_name_.job);
+    owned_rmgr_ = true;
+  }
 }
 
 Device::~Device() {
@@ -42,8 +61,19 @@ void Device::Sync(const DoneCallback& done) { done(Sync()); }
 DeviceAttributes Device::BuildDeviceAttributes(
     const string& name, DeviceType device, Bytes memory_limit,
     const DeviceLocality& locality, const string& physical_device_desc) {
+  return BuildDeviceAttributes(name, "",  device, memory_limit, locality,
+                               physical_device_desc);
+}
+
+// static
+DeviceAttributes Device::BuildDeviceAttributes(
+    const string& name, const string& physical_name,
+    DeviceType device, Bytes memory_limit,
+    const DeviceLocality& locality,
+    const string& physical_device_desc) {
   DeviceAttributes da;
   da.set_name(name);
+  da.set_physical_name(physical_name);
   do {
     da.set_incarnation(random::New64());
   } while (da.incarnation() == 0);  // This proto field must not be zero

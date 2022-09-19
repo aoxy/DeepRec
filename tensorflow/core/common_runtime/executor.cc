@@ -122,6 +122,16 @@ void SetMemory(NodeExecStatsInterface* stats, OpKernelContext* ctx) {
   stats->SetMemory(ctx);
 }
 
+void SetParentID(NodeExecStatsInterface* stats) {
+  if (!stats) return;
+  stats->SetParentID(tracing::CallingContext::GetCurrentContext());
+}
+
+void SetActivityID(NodeExecStatsInterface* stats) {
+  if (!stats) return;
+  stats->SetActivityID(tracing::CallingContext::GetAndPush());
+}
+
 static const std::string enable_cost_model_env_name =
     "ENABLE_EXECUTE_COST_MODEL";
 
@@ -149,8 +159,8 @@ class ExecutorImpl : public Executor {
     Status s = ReadBoolFromEnvVar(
         nodestats::enable_cost_model_env_name, true, &enable_cost_model_);
     if (!s.ok()) {
-      LOG(FATAL) << "Read ENABLE_EXECUTE_COST_MODEL envrionment error. "
-                 << s.error_message();
+      LOG(WARNING) << "Read ENABLE_EXECUTE_COST_MODEL envrionment error. "
+                   << s.error_message();
     }
   }
 
@@ -366,7 +376,8 @@ class ExecutorState {
   Executor::Args::Runner runner_ = nullptr;
   Executor::Args::CostRunner cost_runner_ = nullptr;
   bool sync_on_finish_;
-  const bool run_all_kernels_inline_;
+  ExecutorPolicy executor_policy_ =
+      ExecutorPolicy::USE_NORMAL_EXECUTOR;
 
   PropagatorStateType propagator_;
 
@@ -449,10 +460,11 @@ class ExecutorStateFactory {
     ExecutorInternal::KernelStats* kernel_stats = impl->GetKernelStat();
 
     // InlineExecuteState
-    if (args.run_all_kernels_inline) {
+    if (args.executor_policy == ExecutorPolicy::USE_INLINE_EXECUTOR) {
       return new InlineExecutorState<PropagatorStateType>(
           args, immutable_state, kernel_stats);
-    } else if (args.cost_runner && args.run_cost_model_schedule) {
+    } else if (args.cost_runner &&
+               args.executor_policy == ExecutorPolicy::USE_COST_MODEL_EXECUTOR) {
       // TODO: FIXME consider function lib executor, set cost_runner for it?
       // Schedule by cost model
       ExecutorInternal::ExecuteCostModel* cm = impl->TryToBuildCostModel();
@@ -520,7 +532,7 @@ ExecutorState<PropagatorStateType>::ExecutorState(
       runner_(args.runner),
       cost_runner_(args.cost_runner),
       sync_on_finish_(args.sync_on_finish),
-      run_all_kernels_inline_(args.run_all_kernels_inline),
+      executor_policy_(args.executor_policy),
       propagator_(immutable_state, step_id_, vlog_),
       num_outstanding_ops_(0) {
   // TODO: FIXME Consider function lib executor later
@@ -839,7 +851,8 @@ void ExecutorState<PropagatorStateType>::BatchProcess(std::vector<TaggedNode> no
   params.inputs = &inputs;
   params.input_alloc_attrs = &input_alloc_attrs;
   params.runner = &runner_;
-  params.run_all_kernels_inline = run_all_kernels_inline_;
+  params.run_all_kernels_inline =
+      (executor_policy_ == ExecutorPolicy::USE_INLINE_EXECUTOR);
   params.stats_collector = stats_collector_;
   params.inc_num_deferred_ops_function = [this]() {
     mutex_lock lock(num_deferred_ops_mu_);
@@ -892,6 +905,8 @@ void ExecutorState<PropagatorStateType>::BatchProcess(std::vector<TaggedNode> no
       params.track_allocations = stats ? stats->TrackAllocations() : false;
       nodestats::SetScheduled(stats, scheduled_nsec);
       nodestats::SetAllStart(stats);
+      nodestats::SetParentID(stats);
+      nodestats::SetActivityID(stats);
     }
 
     if (vlog_) {
@@ -1206,6 +1221,7 @@ bool ExecutorState<PropagatorStateType>::NodeDone(
     TaggedNodeReadyQueue* inline_ready) {
   if (stats) {
     nodestats::SetAllEnd(stats);
+    tracing::CallingContext::Pop();
     DCHECK_NE(stats_collector_, nullptr);
     stats->Done(immutable_state_.params().device->name());
   }

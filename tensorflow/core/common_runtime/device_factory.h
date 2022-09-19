@@ -26,6 +26,8 @@ namespace tensorflow {
 
 class Device;
 struct SessionOptions;
+struct DeviceResourceMgrMap;
+struct DeviceGlobalThreadPoolOptions;
 
 class DeviceFactory {
  public:
@@ -41,6 +43,12 @@ class DeviceFactory {
   static Status AddDevices(const SessionOptions& options,
                            const string& name_prefix,
                            std::vector<std::unique_ptr<Device>>* devices);
+
+  static Status AddDevices(const SessionOptions& options,
+                           const string& name_prefix,
+                           std::vector<std::unique_ptr<Device>>* devices,
+                           const DeviceResourceMgrMap* dev_rmgr_map,
+                           const DeviceGlobalThreadPoolOptions& opt);
 
   // Helper for tests.  Create a single device of type "type".  The
   // returned device is always numbered zero, so if creating multiple
@@ -62,6 +70,14 @@ class DeviceFactory {
   virtual Status CreateDevices(
       const SessionOptions& options, const string& name_prefix,
       std::vector<std::unique_ptr<Device>>* devices) = 0;
+
+  virtual Status CreateDevices(
+      const SessionOptions& options, const string& name_prefix,
+      std::vector<std::unique_ptr<Device>>* devices,
+      const DeviceResourceMgrMap* dev_rmgr_map,
+      const DeviceGlobalThreadPoolOptions& opt) {
+    return CreateDevices(options, name_prefix, devices);
+  }
 
   // Return the device priority number for a "device_type" string.
   //

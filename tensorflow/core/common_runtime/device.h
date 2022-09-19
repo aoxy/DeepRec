@@ -58,10 +58,19 @@ class Device : public DeviceBase {
   typedef std::function<void(const Status&)> DoneCallback;
 
   Device(Env* env, const DeviceAttributes& device_attributes);
+  Device(Env* env, const DeviceAttributes& device_attributes,
+         const DeviceResourceMgrMap* dev_rmgr_map);
   ~Device() override;
 
   // Full name of this device (see top comment).
   const string& name() const override { return device_attributes_.name(); }
+
+  const string& physical_name() const override {
+    if (device_attributes_.physical_name().empty()) {
+      return device_attributes_.name();
+    }
+    return device_attributes_.physical_name();
+  }
 
   // Parsed name of this device
   const DeviceNameUtils::ParsedName& parsed_name() const {
@@ -182,6 +191,12 @@ class Device : public DeviceBase {
     return BuildDeviceAttributes(name, device, memory_limit, locality, "");
   }
 
+  static DeviceAttributes BuildDeviceAttributes(
+      const string& name, const string& physical_name,
+      DeviceType device, Bytes memory_limit,
+      const DeviceLocality& locality,
+      const string& physical_device_desc);
+ 
   // Clears the resource manager associated with this device.
   void ClearResourceMgr() { rmgr_->Clear(); }
 
@@ -189,7 +204,9 @@ class Device : public DeviceBase {
 
  protected:
   void DeleteResourceMgr() {
-    delete rmgr_;
+    if (owned_rmgr_) {
+      delete rmgr_;
+    }
     rmgr_ = nullptr;
   }
 
@@ -202,6 +219,7 @@ class Device : public DeviceBase {
 
   // Resources associated w/ this device. E.g., shared variables, etc.
   ResourceMgr* rmgr_ = nullptr;
+  bool owned_rmgr_ = true;
 
   TF_DISALLOW_COPY_AND_ASSIGN(Device);
 };

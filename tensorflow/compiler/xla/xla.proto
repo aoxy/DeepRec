@@ -109,7 +109,7 @@ message DebugOptions {
   bool xla_gpu_use_cudnn_batchnorm = 94;
   bool xla_gpu_use_cudnn_softmax = 95;
 
-  // Generate calls to MKL-DNN in the CPU backend.
+  // Generate calls to OneDNN in the CPU backend.
   bool xla_cpu_use_mkl_dnn = 97;
 
   // Maximum kernel unroll factor for the GPU backend.
@@ -270,7 +270,8 @@ message DebugOptions {
   // reached.
   int32 xla_multiheap_size_constraint_per_heap = 142;
 
-  // Next id: 142
+  // Paths to files with LLVM code.
+  repeated string xla_gpu_llvm_ir_file = 150;
 
   // Persistent compilation cache directory
   string xla_gpu_persistent_cache_dir = 151;

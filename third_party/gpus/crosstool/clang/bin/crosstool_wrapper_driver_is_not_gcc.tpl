@@ -171,7 +171,7 @@ def InvokeNvcc(argv, log=False):
   undefines = ''.join([' -U' + define for define in undefines])
   std_options = GetOptionValue(argv, 'std')
   # currently only c++11 is supported by Cuda 7.0 std argument
-  nvcc_allowed_std_options = ["c++11"]
+  nvcc_allowed_std_options = ["c++14"]
   std_options = ''.join([' -std=' + define
       for define in std_options if define in nvcc_allowed_std_options])
 
@@ -205,10 +205,13 @@ def InvokeNvcc(argv, log=False):
 
   supported_cuda_compute_capabilities = [ %{cuda_compute_capabilities} ]
   nvccopts = '-D_FORCE_INLINES '
-  for capability in supported_cuda_compute_capabilities:
+  for capability in supported_cuda_compute_capabilities[:-1]:
     capability = capability.replace('.', '')
-    nvccopts += r'-gencode=arch=compute_%s,\"code=sm_%s,compute_%s\" ' % (
-        capability, capability, capability)
+    nvccopts += r'-gencode=arch=compute_%s,\"code=sm_%s\" ' % (
+        capability, capability)
+  final_capability = supported_cuda_compute_capabilities[-1].replace('.', '')
+  nvccopts += r'-gencode=arch=compute_%s,\"code=sm_%s,compute_%s\" ' % (
+      final_capability, final_capability, final_capability)
   nvccopts += ' ' + nvcc_compiler_options
   nvccopts += undefines
   nvccopts += defines

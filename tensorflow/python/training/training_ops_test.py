@@ -141,7 +141,8 @@ class TrainingOpsTest(TensorFlowTestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testApplyFtrl(self):
-    for dtype in [np.float16, np.float32, np.float64]:
+    for (dtype, use_gpu) in itertools.product(
+        [np.float16, np.float32, np.float64], [False, True]):
       x = np.arange(100).astype(dtype)
       y = np.arange(1, 101).astype(dtype)
       z = np.arange(102, 202).astype(dtype)
@@ -149,11 +150,11 @@ class TrainingOpsTest(TensorFlowTestCase):
       l1 = np.array(3.0).astype(dtype)
       l2 = np.array(4.0).astype(dtype)
       grad = np.arange(100).astype(dtype)
-      self._testTypesForFtrl(x, y, z, lr, grad, use_gpu=False, l1=l1, l2=l2)
+      self._testTypesForFtrl(x, y, z, lr, grad, use_gpu=use_gpu, l1=l1, l2=l2)
 
   def _testTypesForSparseAdagrad(self, x, y, lr, grad, indices):
     self.setUp()
-    with self.session(use_gpu=False):
+    with self.session(use_gpu=True):
       var = variables.VariableV1(x)
       accum = variables.VariableV1(y)
       self.evaluate(variables.global_variables_initializer())

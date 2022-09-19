@@ -16,6 +16,7 @@
 
 set -eo pipefail
 
+export TF_CUDA_COMPUTE_CAPABILITIES="7.5,8.0"
 export TF_NEED_TENSORRT=0
 export TF_NEED_ROCM=0
 export TF_NEED_COMPUTECPP=0
@@ -41,7 +42,7 @@ for i in $(seq 1 3); do
     ret=0
     bazel test -c opt --config=cuda \
     --verbose_failures --run_under=//tensorflow/tools/ci_build/gpu_build:parallel_gpu_execute  \
-    --test_timeout="300,450,1200,3600" --local_test_jobs=80  \
+    --test_timeout="300,450,1200,3600" --local_test_jobs=80 --test_output=errors \
     -- $TF_BUILD_BAZEL_TARGET && break || ret=$?
 done
 

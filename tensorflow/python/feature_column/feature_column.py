@@ -2572,7 +2572,7 @@ class _SharedEmbeddingColumn(
         '_SharedEmbeddingColumn',
         ('categorical_column', 'dimension', 'combiner', 'initializer',
          'shared_embedding_collection_name', 'ckpt_to_load_from',
-         'tensor_name_in_ckpt', 'max_norm', 'trainable'))):
+         'tensor_name_in_ckpt', 'max_norm', 'trainable', 'do_fusion'))):
   """See `embedding_column`."""
 
   @property
@@ -2636,13 +2636,29 @@ class _SharedEmbeddingColumn(
                              embedding_weights.name,
                              embedding_weights.get_shape(), embedding_shape))
       else:
-        embedding_weights = variable_scope.get_variable(
+        from tensorflow.python.feature_column import feature_column_v2 as fc_new
+        if isinstance(self.categorical_column, fc_new.EmbeddingCategoricalColumn):
+          if self.categorical_column.partition_num is None:
+            partitioner = None
+          else:
+            partitioner = partitioned_variables.fixed_size_partitioner(self.categorical_column.partition_num)
+          embedding_weights = variable_scope.get_embedding_variable_internal(
             name='embedding_weights',
-            shape=embedding_shape,
-            dtype=dtypes.float32,
+            embedding_dim=self.dimension,
             initializer=self.initializer,
             trainable=self.trainable and trainable,
-            collections=weight_collections)
+            collections=weight_collections,
+            partitioner=partitioner,
+            ev_option=self.categorical_column.ev_option
+          )
+        else:
+          embedding_weights = variable_scope.get_variable(
+              name='embedding_weights',
+              shape=embedding_shape,
+              dtype=dtypes.float32,
+              initializer=self.initializer,
+              trainable=self.trainable and trainable,
+              collections=weight_collections)
         ops.add_to_collection(self.shared_embedding_collection_name,
                               embedding_weights)
       if self.ckpt_to_load_from is not None:
@@ -2654,13 +2670,22 @@ class _SharedEmbeddingColumn(
         })
 
       # Return embedding lookup result.
-      return embedding_ops.safe_embedding_lookup_sparse(
-          embedding_weights=embedding_weights,
-          sparse_ids=sparse_ids,
-          sparse_weights=sparse_weights,
-          combiner=self.combiner,
-          name='%s_weights' % self.name,
-          max_norm=self.max_norm)
+      if self.do_fusion:
+        return embedding_ops.fused_safe_embedding_lookup_sparse(
+            embedding_weights=embedding_weights,
+            sparse_ids=sparse_ids,
+            sparse_weights=sparse_weights,
+            combiner=self.combiner,
+            name='%s_weights' % self.name,
+            max_norm=self.max_norm)
+      else:
+        return embedding_ops.safe_embedding_lookup_sparse(
+            embedding_weights=embedding_weights,
+            sparse_ids=sparse_ids,
+            sparse_weights=sparse_weights,
+            combiner=self.combiner,
+            name='%s_weights' % self.name,
+            max_norm=self.max_norm)
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
     if isinstance(self.categorical_column, _SequenceCategoricalColumn):

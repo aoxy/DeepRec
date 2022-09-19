@@ -16,6 +16,7 @@
 
 set -eo pipefail
 
+export TF_CUDA_COMPUTE_CAPABILITIES="7.5,8.0"
 export TF_NEED_TENSORRT=0
 export TF_NEED_ROCM=0
 export TF_NEED_COMPUTECPP=0
@@ -64,13 +65,24 @@ export TF_BUILD_BAZEL_TARGET="$TF_ALL_TARGETS "\
 "-//tensorflow/contrib/compiler/tests:adamax_test_gpu "\
 "-//tensorflow/contrib/cudnn_rnn:cudnn_rnn_ops_test_gpu "\
 "-//tensorflow/contrib/compiler/tests:powersign_test_gpu "\
+"-//tensorflow/contrib/image:distort_image_ops_test "\
+"-//tensorflow/contrib/image:distort_image_ops_test_gpu "\
+"-//tensorflow/contrib/image:sparse_image_warp_test "\
+"-//tensorflow/contrib/image:sparse_image_warp_test_gpu "\
+"-//tensorflow/contrib/layers:rev_block_lib_test "\
+"-//tensorflow/contrib/opt:ggt_test "\
+"-//tensorflow/contrib/opt:matrix_functions_test "\
+"-//tensorflow/contrib/cudnn_rnn:cudnn_rnn_ops_test "\
+"-//tensorflow/contrib/tensor_forest:scatter_add_ndim_op_test "\
+"-//tensorflow/contrib/boosted_trees/estimator_batch:estimator_test "\
+"-//tensorflow/contrib/boosted_trees/estimator_batch:dnn_tree_combined_estimator_test "
 
 for i in $(seq 1 3); do
     [ $i -gt 1 ] && echo "WARNING: cmd execution failed, will retry in $((i-1)) times later" && sleep 2
     ret=0
-    bazel test -c opt --config=cuda --verbose_failures \
+    bazel test -c opt --config=cuda --verbose_failures --test_env='NVIDIA_TF32_OVERRIDE=0' \
     --run_under=//tensorflow/tools/ci_build/gpu_build:parallel_gpu_execute  \
-    --test_timeout="300,450,1200,3600" --local_test_jobs=80  \
+    --test_timeout="300,450,1200,3600" --local_test_jobs=1 --test_output=errors \
     -- $TF_BUILD_BAZEL_TARGET && break || ret=$?
 done
 

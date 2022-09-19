@@ -23,7 +23,7 @@ on:
       - '*.md'
 
 env:
-  IMAGE: registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-developer:deeprec-dev-gpu-cibuild-py36-cu110-ubuntu18.04
+  IMAGE: alideeprec/deeprec-cicd:deeprec-dev-gpu-cibuild-py36-cu116-ubuntu18.04
   JOBNAME: deeprec-ci-gpu-${{ github.run_id }}
 
 jobs:
@@ -44,7 +44,7 @@ jobs:
 
     - name: Build Wheel
       run:
-        docker exec ${JOBNAME} /mnt/cibuild/build-cpu.sh /mnt
+        docker exec ${JOBNAME} /mnt/cibuild/build-gpu.sh /mnt
 
     - name:  Remove Container
       if: ${{ always() }}

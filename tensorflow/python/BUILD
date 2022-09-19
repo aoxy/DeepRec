@@ -18,6 +18,7 @@ visibility = [
 ]
 
 load("//tensorflow:tensorflow.bzl", "if_mlir", "if_not_v2", "if_not_windows", "py_test", "py_tests", "tf_cc_shared_object", "tf_cuda_library", "tf_gen_op_wrapper_py", "tf_py_build_info_genrule", "tf_py_test")
+load("//tensorflow:tensorflow.bzl", "tf_python_pybind_extension")
 load("//tensorflow:tensorflow.bzl", "pybind_extension")
 load("//tensorflow:tensorflow.bzl", "tf_py_wrap_cc")
 load("//tensorflow:tensorflow.bzl", "cuda_py_test")
@@ -2106,6 +2107,26 @@ tf_gen_op_wrapper_private_py(
 )
 
 tf_gen_op_wrapper_private_py(
+    name = "parquet_ops_gen",
+    visibility = [
+        "//tensorflow:__subpackages__",
+    ],
+    deps = [
+        "//tensorflow/core:parquet_ops_op_lib"
+    ]
+)
+
+tf_gen_op_wrapper_private_py(
+    name = "fused_l2_normalize_ops_gen",
+    visibility = [
+        "//tensorflow:__subpackages__",
+    ],
+    deps = [
+        "//tensorflow/core:fused_l2_normalize_ops_op_lib"
+    ]
+)
+
+tf_gen_op_wrapper_private_py(
     name = "image_ops_gen",
     visibility = ["//learning/brain/python/ops:__pkg__"],
 )
@@ -2255,7 +2276,7 @@ tf_gen_op_wrapper_private_py(
 )
 
 tf_gen_op_wrapper_private_py(
-   name = "data_buffer_ops_gen",
+   name = "tensor_buffer_ops_gen",
 )
 
 tf_gen_op_wrapper_private_py(
@@ -2913,10 +2934,10 @@ py_library(
         ":array_ops",
         ":clip_ops",
         ":control_flow_ops",
-        ":data_buffer_ops_gen",
-	":framework",
-	":framework_ops",
-	":framework_for_generated_wrappers",
+        ":tensor_buffer_ops_gen",
+        ":framework",
+        ":framework_ops",
+        ":framework_for_generated_wrappers",
     ],
 )
 
@@ -2928,8 +2949,8 @@ py_library(
         ":array_ops",
         ":clip_ops",
         ":control_flow_ops",
-        ":data_buffer_ops_gen",
-	":framework",
+        ":tensor_buffer_ops_gen",
+        ":framework",
         ":framework_for_generated_wrappers",
     ],
 )
@@ -3526,6 +3547,7 @@ py_library(
         ":sparse_ops",
         ":util",
         ":variables",
+        ":fused_l2_normalize_ops_gen"
     ],
 )
 
@@ -3543,6 +3565,7 @@ py_library(
         ":sparse_ops",
         ":tensor_util",
         "//tensorflow/python/eager:context",
+        ":fused_l2_normalize_ops_gen"
     ],
 )
 
@@ -4789,6 +4812,16 @@ py_library(
     ],
 )
 
+tf_python_pybind_extension(
+    name = "_pywrap_tensor_float_32_execution",
+    srcs = ["util/tensor_float_32.cc"],
+    hdrs = ["//tensorflow/core/platform:tensor_float_32_hdr"],
+    module_name = "_pywrap_tensor_float_32_execution",
+    deps = [
+        "@pybind11",
+    ]
+)
+
 pybind_extension(
     name = "_tf_stack",
     srcs = ["util/tf_stack.cc"],
@@ -4820,6 +4853,7 @@ py_library(
     ],
     deps = [
         ":_tf_stack",
+        ":_pywrap_tensor_float_32_execution",
         "@org_python_pypi_backports_weakref",
         "@com_google_protobuf//:protobuf_python",
         "//third_party/py/numpy",
@@ -5176,6 +5210,7 @@ tf_py_wrap_cc(
         "util/tfprof.i",
         "util/traceme.i",
         "util/transform_graph.i",
+        "util/quantize_embedding_variable.i",
         "util/util.i",
     ],
     # add win_def_file for pywrap_tensorflow
@@ -5202,6 +5237,7 @@ tf_py_wrap_cc(
         "//tensorflow/c:c_api",
         "//tensorflow/c:c_api_experimental",
         "//tensorflow/c:checkpoint_reader",
+        "//tensorflow/c:quantize_embedding_variable",
         "//tensorflow/c:python_api",
         "//tensorflow/c:tf_status_helper",
         "//tensorflow/c/eager:c_api",
@@ -5218,6 +5254,7 @@ tf_py_wrap_cc(
         "//tensorflow/core/grappler/graph_analyzer:graph_analyzer_tool",
         "//tensorflow/core/grappler/optimizers:meta_optimizer",
         "//tensorflow/core:lib",
+        "//tensorflow/core/platform:tensor_float_32_utils",
         "//tensorflow/core:reader_base",
         "//tensorflow/core/debug",
         "//tensorflow/core/distributed_runtime:server_lib",
@@ -6564,8 +6601,8 @@ py_test(
         ":partitioned_variables",
         ":variable_scope",
         ":embedding_ops",
-	":prefetch",
-        #":data_buffer_ops_gen",
+        ":prefetch",
+        #":tensor_buffer_ops_gen",
         ":prefetch_runner",
         ":state_ops",
         "//tensorflow/contrib/layers:layers_py",
@@ -6599,6 +6636,24 @@ py_test(
     srcs_version = "PY2AND3",
     tags = ["no_windows"],
     deps = [
+        ":client_testlib",
+        ":framework_for_generated_wrappers",
+        ":partitioned_variables",
+        ":variable_scope",
+        ":embedding_ops",
+        ":state_ops",
+        "//tensorflow/contrib/layers:layers_py",
+        "//tensorflow/contrib/feature_column:feature_column_py",
+        "//third_party/py/numpy",
+    ],
+)
+
+cuda_py_test(
+    name = "embedding_variable_ops_gpu_test",
+    size = "small",
+    srcs = ["ops/embedding_variable_ops_gpu_test.py"],
+    tags = ["no_windows"],
+    additional_deps = [
         ":client_testlib",
         ":framework_for_generated_wrappers",
         ":partitioned_variables",
@@ -7323,6 +7378,23 @@ cuda_py_test(
     srcs = ["ops/raw_ops_test.py"],
     additional_deps = [
         "//tensorflow/python:client_testlib",
+    ],
+    xla_enable_strict_auto_jit = True,
+)
+
+cuda_py_test(
+    name = "weight_decay_optimizers_test",
+    size = "small",
+    srcs = ["training/weight_decay_optimizers_test.py"],
+    additional_deps = [
+        ":array_ops",
+        ":framework",
+        ":math_ops",
+        ":platform",
+        ":training",
+        ":platform_test",
+        ":client_testlib",
+        "//third_party/py/numpy",
     ],
     xla_enable_strict_auto_jit = True,
 )

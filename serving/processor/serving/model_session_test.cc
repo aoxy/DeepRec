@@ -3,6 +3,7 @@
 #include "serving/processor/serving/model_session.h"
 #include "serving/processor/serving/model_config.h"
 #include "serving/processor/serving/model_message.h"
+#include "tensorflow/core/common_runtime/direct_session_group.h"
 #include "tensorflow/core/public/session.h"
 
 namespace tensorflow {
@@ -27,6 +28,9 @@ ModelConfig CreateValidModelConfig() {
   config.oss_endpoint = "";
   config.oss_access_id = "";
   config.oss_access_key = "";
+
+  config.session_num = 1;
+
   return config;
 }
 }
@@ -180,8 +184,16 @@ class TestableModelSessionMgr : public ModelSessionMgr {
       SessionOptions* sess_options, RunOptions* run_options) :
     ModelSessionMgr(meta_graph_def, sess_options, run_options) {}
 
-  Status CreateSession(Session** sess) override {
-    *sess = new FakeSession();
+  Status CreateSessionGroup(SessionGroup** sess_group, 
+      ModelConfig* config) override {
+    int session_num = config->session_num;
+    *sess_group = new DirectSessionGroup();
+    if (session_num > 0) {
+      (*sess_group)->CreateLeaderSession(new FakeSession());
+      for (int i = 1; i < session_num; ++i) {
+        (*sess_group)->CreateFollowerSession(new FakeSession());
+      }
+    }
     return Status::OK();
   }
 
@@ -194,13 +206,14 @@ class TestableModelSessionMgr : public ModelSessionMgr {
   }
 
   void AddModelSession(IFeatureStoreMgr* sparse_storage) {
-    Session* sess = nullptr;
-    CreateSession(&sess);
-    sessions_.emplace_back(new ModelSession(sess, Version(), sparse_storage));
+    SessionGroup* sess_group = nullptr;
+    ModelConfig config;
+    CreateSessionGroup(&sess_group, &config);
+    sessions_.emplace_back(new ModelSession(sess_group, "MOD", Version(), sparse_storage));
   }
 
   void* GetServingSession() {
-    return serving_session_;
+    return serving_session_->GetSession();
   }
 
   Status RunRestoreOps(

@@ -36,7 +36,7 @@ except ImportError:
 _DEFAULT_CUDA_VERSION = '10'
 _DEFAULT_CUDNN_VERSION = '7'
 _DEFAULT_TENSORRT_VERSION = '5'
-_DEFAULT_CUDA_COMPUTE_CAPABILITIES = '3.5,7.0'
+_DEFAULT_CUDA_COMPUTE_CAPABILITIES = '6.0,6.1,7.0,7.5,8.0'
 
 _TF_OPENCL_VERSION = '1.2'
 _DEFAULT_COMPUTECPP_TOOLKIT_PATH = '/usr/local/computecpp'
@@ -49,7 +49,7 @@ _TF_BAZELRC_FILENAME = '.tf_configure.bazelrc'
 _TF_WORKSPACE_ROOT = ''
 _TF_BAZELRC = ''
 _TF_CURRENT_BAZEL_VERSION = None
-_TF_MIN_BAZEL_VERSION = '0.24.1'
+_TF_MIN_BAZEL_VERSION = '0.26.1'
 _TF_MAX_BAZEL_VERSION = '0.26.1'
 
 NCCL_LIB_PATHS = [
@@ -1435,6 +1435,8 @@ def main():
   set_build_var(environ_cp, 'TF_ENABLE_PMEM', 'PMEM', 'with_pmem_support',
                 False, 'pmem')
 
+  set_build_var(environ_cp, 'TF_ENABLE_GPU_EV', 'GPU_EV', 'with_gpu_ev_support',
+                False, 'gpu_ev')
 
   set_action_env_var(
       environ_cp,
@@ -1584,7 +1586,7 @@ def main():
   print('Preconfigured Bazel build configs. You can use any of the below by '
         'adding "--config=<>" to your build command. See .bazelrc for more '
         'details.')
-  config_info_line('mkl', 'Build with MKL support.')
+  config_info_line('mkl_threadpool', 'Build with oneDNN support.')
   config_info_line('monolithic', 'Config for mostly static monolithic build.')
   config_info_line('gdr', 'Build with GDR support.')
   config_info_line('verbs', 'Build with libverbs support.')

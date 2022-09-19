@@ -27,6 +27,10 @@ class ThreadPoolDevice : public LocalDevice {
   ThreadPoolDevice(const SessionOptions& options, const string& name,
                    Bytes memory_limit, const DeviceLocality& locality,
                    Allocator* allocator);
+  ThreadPoolDevice(const SessionOptions& options, const string& name,
+                   Bytes memory_limit, const DeviceLocality& locality,
+                   Allocator* allocator, const DeviceResourceMgrMap* dev_rmgr_map,
+                   const DeviceGlobalThreadPoolOptions& opt);
   ~ThreadPoolDevice() override;
 
   Allocator* GetAllocator(AllocatorAttributes attr) override;
@@ -45,6 +49,8 @@ class ThreadPoolDevice : public LocalDevice {
   Status Sync() override { return Status::OK(); }
 
  private:
+  void Init();
+
   Allocator* allocator_;  // Not owned
   std::unique_ptr<ScopedAllocatorMgr> scoped_allocator_mgr_;
 };

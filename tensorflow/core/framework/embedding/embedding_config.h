@@ -19,16 +19,28 @@ struct EmbeddingConfig {
   int64 num_counter;
   DataType counter_type;
   int64 default_value_dim;
+  float default_value_no_permission;
   int normal_fix_flag;
+  bool record_freq;
+  bool record_version;
 
-  EmbeddingConfig(int64 emb_index = 0, int64 primary_emb_index = 0,
-                  int64 block_num = 1, int slot_num = 0,
-                  const std::string& name = "", int64 steps_to_live = 0,
-                  int64 filter_freq = 0, int64 max_freq = 999999,
-                  float l2_weight_threshold = -1.0, const std::string& layout = "normal",
-                  int64 max_element_size = 0, float false_positive_probability = -1.0,
+  EmbeddingConfig(int64 emb_index = 0,
+                  int64 primary_emb_index = 0,
+                  int64 block_num = 1,
+                  int slot_num = 0,
+                  const std::string& name = "",
+                  int64 steps_to_live = 0,
+                  int64 filter_freq = 0,
+                  int64 max_freq = 999999,
+                  float l2_weight_threshold = -1.0,
+                  const std::string& layout = "normal",
+                  int64 max_element_size = 0,
+                  float false_positive_probability = -1.0,
                   DataType counter_type = DT_UINT64,
-                  int64 default_value_dim = 4096):
+                  int64 default_value_dim = 4096,
+                  float default_value_no_permission = .0,
+                  bool record_freq =false,
+                  bool record_version=false):
       emb_index(emb_index),
       primary_emb_index(primary_emb_index),
       block_num(block_num),
@@ -40,10 +52,14 @@ struct EmbeddingConfig {
       l2_weight_threshold(l2_weight_threshold),
       counter_type(counter_type),
       default_value_dim(default_value_dim),
-      normal_fix_flag(0) {
+      default_value_no_permission(default_value_no_permission),
+      normal_fix_flag(0),
+      record_freq(record_freq),
+      record_version(record_version) {
     if (max_element_size != 0 && false_positive_probability != -1.0){
       kHashFunc = calc_num_hash_func(false_positive_probability);
-      num_counter = calc_num_counter(max_element_size, false_positive_probability);
+      num_counter = calc_num_counter(max_element_size,
+          false_positive_probability);
     } else {
       kHashFunc = 0;
       num_counter = 0;
@@ -53,10 +69,24 @@ struct EmbeddingConfig {
     }
   }
 
-  int64 calc_num_counter(int64 max_element_size, float false_positive_probability) {
+  int64 calc_num_counter(int64 max_element_size,
+      float false_positive_probability) {
     float loghpp = fabs(log(false_positive_probability));
     float factor = log(2) * log(2);
-    return ceil(loghpp / factor * max_element_size);
+    int64 num_bucket = ceil(loghpp / factor * max_element_size);
+    if (num_bucket * sizeof(counter_type) > 10 * (1L << 30))
+      LOG(WARNING)<<"The Size of BloomFilter is more than 10GB!";
+    return num_bucket;
+  }
+
+  bool is_counter_filter(){
+    if (filter_freq !=0 &&
+         kHashFunc == 0 &&
+         num_counter == 0){
+      return true;
+    } else {
+      return false;
+    }
   }
 
   int64 calc_num_hash_func(float false_positive_probability) {
@@ -68,7 +98,9 @@ struct EmbeddingConfig {
   }
 
   int64 total_num(int alloc_len) {
-    return block_num * (1 + (1 - normal_fix_flag) * slot_num) * (1 + normal_fix_flag * (alloc_len * (slot_num + 1) - 1));
+    return block_num *
+           (1 + (1 - normal_fix_flag) * slot_num) *
+           (1 + normal_fix_flag * (alloc_len * (slot_num + 1) - 1));
   }
 
   int64 get_filter_freq() {

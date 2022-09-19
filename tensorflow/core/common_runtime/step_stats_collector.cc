@@ -54,7 +54,9 @@ NodeExecStatsWrapper::NodeExecStatsWrapper(
     const NodeDef* node, StepStatsCollector* step_stats_collector)
     : NodeExecStatsWrapper(MakeUnique<NodeExecStats>(), node,
                            step_stats_collector) {
+  static thread_local int32 thread_id = Env::Default()->GetCurrentThreadId();
   stats_->set_node_name(node->name());
+  stats_->set_thread_id(thread_id);
 }
 
 NodeExecStatsWrapper::NodeExecStatsWrapper(
@@ -189,6 +191,14 @@ void NodeExecStatsWrapper::AddAllocation(
     memory->set_allocator_bytes_in_use(stats->bytes_in_use);
   }
   allocations_.push_back(std::make_pair(memory, tracking_allocator));
+}
+
+void NodeExecStatsWrapper::SetActivityID(int64 id) {
+  stats_->set_correlation_id(id);
+}
+
+void NodeExecStatsWrapper::SetParentID(int64 id) {
+  stats_->set_parent_id(id);
 }
 
 void NodeExecStatsWrapper::Finalize() {

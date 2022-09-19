@@ -26,6 +26,17 @@ namespace test {
 class Benchmark;
 }
 struct SessionOptions;
+struct DeviceResourceMgrMap;
+
+struct DeviceGlobalThreadPoolOptions {
+  // Default we create one global threadpool
+  int global_threadpool_num = 1;
+  // Default all devices use global_threadpool[0]
+  int device_threadpool_index = 0;
+  // Pin thread pool to cpu cores,
+  // default we don't pin core.
+  std::vector<unsigned> cpuset;
+};
 
 // This class is shared by ThreadPoolDevice and GPUDevice and
 // initializes a shared Eigen compute device used by both.  This
@@ -35,9 +46,17 @@ class LocalDevice : public Device {
  public:
   LocalDevice(const SessionOptions& options,
               const DeviceAttributes& attributes);
+  LocalDevice(const SessionOptions& options,
+              const DeviceAttributes& attributes,
+              const DeviceResourceMgrMap* dev_rmgr_map,
+              const DeviceGlobalThreadPoolOptions& opt);
   ~LocalDevice() override;
 
  private:
+  void Init(const SessionOptions& options,
+            const DeviceAttributes& attributes,
+            const DeviceGlobalThreadPoolOptions& opt);
+
   static bool use_global_threadpool_;
 
   static void set_use_global_threadpool(bool use_global_threadpool) {
