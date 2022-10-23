@@ -283,7 +283,7 @@ class LFUCache : public BatchCache<K> {
 template <class K>
 class RedisLFUCache : public BatchCache<K> {
  public:
-  LFUCache() {
+  RedisLFUCache() {
     min_freq = 255;
     max_freq = 0;
     freq_table.emplace_back(std::pair<std::list<RedisLFUNode>*, int64>(
@@ -332,8 +332,8 @@ class RedisLFUCache : public BatchCache<K> {
             RedisLFUNode(id, global_step));
         freq_table[LFU_INIT_VAL].second++;
         key_table[id] = freq_table[LFU_INIT_VAL].first->begin();
-        min_freq = std::min(min_freq, LFU_INIT_VAL);
-        max_freq = std::max(max_freq, LFU_INIT_VAL);
+        min_freq = std::min(min_freq, (uint8_t)LFU_INIT_VAL);
+        max_freq = std::max(max_freq, (uint8_t)LFU_INIT_VAL);
         BatchCache<K>::num_miss++;
       } else {
         typename std::list<RedisLFUNode>::iterator node = it->second;
@@ -400,8 +400,8 @@ class RedisLFUCache : public BatchCache<K> {
     unsigned long get_ldt() { return lfu >> 8; }
   };
   time_t global_step;
-  size_t min_freq;
-  size_t max_freq;
+  uint8_t min_freq;
+  uint8_t max_freq;
   std::vector<std::pair<std::list<RedisLFUNode>*, int64>> freq_table;
   std::unordered_map<K, typename std::list<RedisLFUNode>::iterator> key_table;
   mutex mu_;
