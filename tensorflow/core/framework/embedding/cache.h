@@ -272,6 +272,12 @@ class LFUCache : public BatchCache<K> {
   mutex mu_;
 };
 
+#define LFU_INIT_VAL 5
+#define LFU_LOG_FACTOR 10
+#define MAX_STEP 16777215
+
+#define MOD_STEP(st) (st & MAX_STEP)  // 2^24-1
+#define TIMES_TO_MAX (32640 * LFU_LOG_FACTOR * LFU_LOG_FACTOR)
 
 template <class K>
 class AutoLRFUCache : public BatchCache<K> {
