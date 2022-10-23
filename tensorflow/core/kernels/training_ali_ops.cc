@@ -139,7 +139,6 @@ class KvSparseApplyAdagradOp : public OpKernel {
               auto v = var->flat(value_ptr);
               a += g.square();
               v -= g.constant(lr_scalar) * g * a.rsqrt();
-              var->Commit(index, value_ptr);
             }
           }
         };
@@ -253,18 +252,28 @@ class KvSparseApplyAdagradGPUOp : public OpKernel {
           };
           const int64 cost = 1000; //very unreliable estimate for cost per step.
           auto worker_threads = ctx->device()->tensorflow_cpu_worker_threads();
-          Shard(worker_threads->num_threads, worker_threads->workers, N, cost, do_work);
+          Shard(worker_threads->num_threads,
+               worker_threads->workers, N, cost, do_work);
 
           bool* init_flags = new bool[N]();
           T** a = new T*[N];
           T** v = new T*[N];
-          auto do_work2 = [var, accum, value_ptrs, init_flags, a, v] (int64 start, int64 limit) {
+          bool* copyback_flags = new bool[N];
+          T** accum_default_values = new T*[N];
+          auto do_work2 = [var, accum, value_ptrs, init_flags, a, v,
+            copyback_flags, accum_default_values] (int64 start, int64 limit) {
             for (int i = start; i < limit; i++) {
               a[i] = accum->LookupOrCreateEmb(value_ptrs[i], init_flags[i]);
-              v[i] = var->LookupOrCreateEmb(value_ptrs[i], var->GetDefaultValue(0));
+              v[i] = var->LookupOrCreateEmb(value_ptrs[i],
+                                            var->GetDefaultValue(0));
+              copyback_flags[i] = false;
+              accum_default_values[i] = accum->GetDefaultValue(i);
             }
           }; // Get V*
-          Shard(worker_threads->num_threads, worker_threads->workers, N, cost, do_work2);
+          Shard(worker_threads->num_threads,
+                worker_threads->workers, N, cost, do_work2);
+          accum->InitializeEmbeddingOnGPU(ids, N, init_flags,
+                                          a, accum_default_values);
 
           T **dev_a, **dev_v;
           T* default_value = accum->GetDefaultValue(0);
@@ -277,17 +286,24 @@ class KvSparseApplyAdagradGPUOp : public OpKernel {
           CHECK(dev_v);
           cudaMemcpy(dev_a, a, sizeof(T*) * N, cudaMemcpyHostToDevice);
           cudaMemcpy(dev_v, v, sizeof(T*) * N, cudaMemcpyHostToDevice);
-          cudaMemcpy(dev_init_flags, init_flags, sizeof(bool) * N, cudaMemcpyHostToDevice);
+          cudaMemcpy(dev_init_flags,
+                     init_flags, sizeof(bool) * N, cudaMemcpyHostToDevice);
 
-          void* args[] = { (void*)&dev_a, (void*)&dev_v, (void*)&grad_base, (void*)&lr_scalar,
-                           (void*)&embedding_dim, (void*)&N, (void*)&dev_init_flags, (void*)&default_value};
-          cudaLaunchKernel((void *)SparseApplyAdagradGPU<T>, (N + block_dim - 1) / block_dim * embedding_dim, block_dim, args, 0, NULL);
+          void* args[] = { (void*)&dev_a, (void*)&dev_v,
+                           (void*)&grad_base, (void*)&lr_scalar,
+                           (void*)&embedding_dim, (void*)&N,
+                           (void*)&dev_init_flags, (void*)&default_value};
+          cudaLaunchKernel((void *)SparseApplyAdagradGPU<T>,
+                           (N + block_dim - 1) / block_dim * embedding_dim,
+                           block_dim, args, 0, NULL);
           cudaDeviceSynchronize();
 
           delete[] a;
           delete[] v;
           delete[] ids;
           delete[] value_ptrs;
+          delete[] init_flags;
+          delete[] copyback_flags;
         } else {
           auto indices_vec = indices.vec<TKey>();
           auto grad_flat = grad.flat_outer_dims<T>();
@@ -307,7 +323,6 @@ class KvSparseApplyAdagradGPUOp : public OpKernel {
                 auto v = var->flat(value_ptr);
                 a += g.square();
                 v -= g.constant(lr_scalar) * g * a.rsqrt();
-                var->Commit(index, value_ptr);
               }
             }
           };
@@ -611,8 +626,7 @@ class KvSparseApplyFtrlOp : public OpKernel {
   } else {                                                                     \
     var = var.constant(static_cast<T>(0));                                     \
   }                                                                            \
-  accum += grad.square();                                                      \
-  var_->Commit(index, value_ptr);                                         
+  accum += grad.square();
               if (has_l2_shrinkage) {
                 auto grad_with_shrinkage =
                     grad + static_cast<T>(2) * l2_shrinkage_scalar * var;
@@ -1297,7 +1311,6 @@ class KvSparseApplyAdagradDecayOp : public OpKernel {
               }
               a += g.square();
               v -= g.constant(lr_scalar) * g * a.rsqrt();
-              var->Commit(index, value_ptr);
             }
           }
         };
@@ -1455,7 +1468,6 @@ class KvSparseApplyAdamOp : public OpKernel {
               m_a += (g - m_a) * (static_cast<T>(1) - beta1_scalar);
               v_a += (g.square() - v_a) * (static_cast<T>(1) - beta2_scalar);
               var_i -= (m_a * alpha) / (v_a.sqrt() + epsilon_scalar);
-              var->Commit(index, value_ptr);
             }
           }
         }
@@ -2086,7 +2098,6 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
 
               auto v = var->flat(value_ptr);
               v -= m_;
-              var->Commit(index, value_ptr);
             }
           }
         };
@@ -2131,7 +2142,6 @@ class KvSparseApplyAdamAsyncOp : public OpKernel {
                 m_a = m_a * beta1_scalar + g * (static_cast<T>(1) - beta1_scalar);
                 v_a = v_a * beta2_scalar + g.square() * (static_cast<T>(1) - beta2_scalar);
                 var_i -= (m_a * alpha) / (v_a.sqrt() + epsilon_scalar);
-                var->Commit(index, value_ptr);
               }
             }
           }
@@ -2415,7 +2425,6 @@ class KvResourceSparseApplyGradientDescentOp : public OpKernel {
               auto g = grad_flat.template chip<0>(i);
               auto v = var->flat(value_ptr);
               v -= g.constant(lr_scalar) * g;
-              var->Commit(index, value_ptr);
             }
           }
         };
@@ -2579,7 +2588,6 @@ class KvSparseApplyAdamWOp : public OpKernel {
               // v_a = beta2 * v + (1 - beta2) * (g * g)
               v_a += (g.square() - v_a) * (static_cast<T>(1) - beta2_scalar);
               var_i -= (m_a * alpha) / (v_a.sqrt() + epsilon_scalar) + weight_decay_scalar * var_i;
-              var->Commit(index, value_ptr);
             }
           }
         }

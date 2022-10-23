@@ -20,14 +20,6 @@ const static std::vector<int64> default_seeds = {
  2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
  43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97
 };
-
-template<typename K, typename EV>
-void UpdateCache(K* key_buff, int64 key_num, EV* ev) {
-    embedding::BatchCache<K>* cache = ev->Cache();
-    if (cache) {
-      cache->add_to_rank(key_buff, key_num);
-    }
-}
 }
 
 struct RestoreBuffer {
@@ -51,15 +43,21 @@ class EmbeddingFilter {
   virtual void LookupOrCreate(K key, V* val, const V* default_value_ptr,
     ValuePtr<V>** value_ptr, int count, const V* default_value_no_permission) = 0;
 
-  virtual void Lookup(EV* ev, K key, V* val, const V* default_value_ptr,
-    const V* default_value_no_permission) {
-    ValuePtr<V>* value_ptr = nullptr;
-    Status s = ev->LookupKey(key, &value_ptr);
-    if (s.ok()) {
-      V* mem_val = ev->LookupPrimaryEmb(value_ptr);
-      memcpy(val, mem_val, sizeof(V) * ev->ValueLen());
-    } else {
-      memcpy(val, default_value_no_permission, sizeof(V) * ev->ValueLen());
+  virtual Status Lookup(EV* ev, K key, V* val, const V* default_value_ptr,
+    const V* default_value_no_permission) = 0;
+
+  virtual void UpdateCache(const K* key_buff, int64 key_num, EV* ev,
+      const int64* version_buff, const int64* freq_buff) {
+    embedding::BatchCache<K>* cache = ev->Cache();
+    if (cache) {
+      cache->add_to_rank(key_buff, key_num, version_buff, freq_buff);
+      if (cache->size() > ev->CacheSize()) {
+        int64 evict_size = cache->size() - ev->CacheSize();
+        K* evict_ids = new K[evict_size];
+        size_t true_size = cache->get_evic_ids(evict_ids, evict_size);
+        ev->Eviction(evict_ids, true_size);
+        delete []evict_ids;
+      }
     }
   }
 
@@ -105,6 +103,11 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
         bloom_counter_ = (void *)calloc(config_.num_counter, sizeof(long));
     }
     GenerateSeed(config.kHashFunc);
+  }
+
+  Status Lookup(EV* ev, K key, V* val, const V* default_value_ptr,
+      const V* default_value_no_permission) override {
+    return errors::Unimplemented("Can't use CBF filter in EV for inference.");
   }
 
   void LookupOrCreate(K key, V* val, const V* default_value_ptr,
@@ -278,10 +281,11 @@ class BloomFilter : public EmbeddingFilter<K, V, EV> {
           V* v = ev_->LookupOrCreateEmb(value_ptr,
               ev_->GetDefaultValue(key_buff[i]));
         }
-        TF_CHECK_OK(ev_->storage_manager()->Commit(key_buff[i], value_ptr));
       }
     }
-    UpdateCache(key_buff, key_num, ev_);
+    if (ev_->IsMultiLevel()) {
+      this->UpdateCache(key_buff, key_num, ev_, version_buff, freq_buff);
+    }
     return Status::OK();
   }
 
@@ -394,6 +398,11 @@ class CounterFilter : public EmbeddingFilter<K, V, EV> {
        : config_(config), ev_(ev), storage_manager_(storage_manager) {
   }
 
+  Status Lookup(EV* ev, K key, V* val, const V* default_value_ptr,
+      const V* default_value_no_permission) override {
+    return errors::Unimplemented("Can't use counter filter in EV for inference.");
+  }
+
   void LookupOrCreate(K key, V* val, const V* default_value_ptr,
                       ValuePtr<V>** value_ptr, int count,
                       const V* default_value_no_permission) override {
@@ -467,10 +476,11 @@ class CounterFilter : public EmbeddingFilter<K, V, EV> {
            V* v = ev_->LookupOrCreateEmb(value_ptr,
                ev_->GetDefaultValue(key_buff[i]));
         }
-        TF_CHECK_OK(ev_->storage_manager()->Commit(key_buff[i], value_ptr));
       }
     }
-    UpdateCache(key_buff, key_num, ev_);
+    if (ev_->IsMultiLevel()) {
+      this->UpdateCache(key_buff, key_num, ev_, version_buff, freq_buff);
+    }
     return Status::OK();
   }
 
@@ -486,6 +496,19 @@ class NullableFilter : public EmbeddingFilter<K, V, EV> {
   NullableFilter(const EmbeddingConfig& config,
       EV* ev, embedding::StorageManager<K, V>* storage_manager)
        : config_(config), ev_(ev), storage_manager_(storage_manager) {
+  }
+
+  Status Lookup(EV* ev, K key, V* val, const V* default_value_ptr,
+      const V* default_value_no_permission) override {
+    ValuePtr<V>* value_ptr = nullptr;
+    Status s = ev->LookupKey(key, &value_ptr);
+    if (s.ok()) {
+      V* mem_val = ev->LookupPrimaryEmb(value_ptr);
+      memcpy(val, mem_val, sizeof(V) * ev->ValueLen());
+    } else {
+      memcpy(val, default_value_no_permission, sizeof(V) * ev->ValueLen());
+    }
+    return Status::OK();
   }
 
   void LookupOrCreate(K key, V* val, const V* default_value_ptr,
@@ -581,14 +604,14 @@ class NullableFilter : public EmbeddingFilter<K, V, EV> {
       if (!is_filter) {
         V* v = ev_->LookupOrCreateEmb(value_ptr,
             value_buff + i * ev_->ValueLen());
-        TF_CHECK_OK(ev_->storage_manager()->Commit(key_buff[i], value_ptr));
       }else {
         V* v = ev_->LookupOrCreateEmb(value_ptr,
             ev_->GetDefaultValue(key_buff[i]));
-        TF_CHECK_OK(ev_->storage_manager()->Commit(key_buff[i], value_ptr));
       }
     }
-    UpdateCache(key_buff, key_num, ev_);
+    if (ev_->IsMultiLevel()) {
+      this->UpdateCache(key_buff, key_num, ev_, version_buff, freq_buff);
+    }
     return Status::OK();
   }
 
