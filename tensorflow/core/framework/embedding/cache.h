@@ -272,6 +272,141 @@ class LFUCache : public BatchCache<K> {
   mutex mu_;
 };
 
+
+#define LFU_INIT_VAL 5
+#define LFU_LOG_FACTOR 10
+#define MAX_STEP 16777215
+
+#define MOD_STEP(st) (st & MAX_STEP)  // 2^24-1
+#define TIMES_TO_MAX (32640 * LFU_LOG_FACTOR * LFU_LOG_FACTOR)
+
+template <class K>
+class RedisLFUCache : public BatchCache<K> {
+ public:
+  LFUCache() {
+    min_freq = 255;
+    max_freq = 0;
+    freq_table.emplace_back(std::pair<std::list<RedisLFUNode>*, int64>(
+        new std::list<RedisLFUNode>, 0));
+    BatchCache<K>::num_hit = 0;
+    BatchCache<K>::num_miss = 0;
+  }
+
+  size_t size() {
+    mutex_lock l(mu_);
+    return key_table.size();
+  }
+
+  size_t get_evic_ids(K* evic_ids, size_t k_size) {
+    mutex_lock l(mu_);
+    size_t true_size = 0;
+    for (size_t i = 0; i < k_size && key_table.size() > 0; ++i) {
+      auto rm_it = freq_table[min_freq].first->back();
+      key_table.erase(rm_it.key);
+      evic_ids[i] = rm_it.key;
+      ++true_size;
+      freq_table[min_freq].first->pop_back();
+      freq_table[min_freq].second--;
+      if (freq_table[min_freq].second == 0) {
+        ++min_freq;
+        while (min_freq <= max_freq) {
+          if (freq_table[min_freq].second == 0) {
+            ++min_freq;
+          } else {
+            break;
+          }
+        }
+      }
+    }
+    return true_size;
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size) {
+    mutex_lock l(mu_);
+    global_step = MOD_STEP(global_step + 1);
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      auto it = key_table.find(id);
+      if (it == key_table.end()) {
+        freq_table[LFU_INIT_VAL].first->emplace_front(
+            RedisLFUNode(id, global_step));
+        freq_table[LFU_INIT_VAL].second++;
+        key_table[id] = freq_table[LFU_INIT_VAL].first->begin();
+        min_freq = std::min(min_freq, LFU_INIT_VAL);
+        max_freq = std::max(max_freq, LFU_INIT_VAL);
+        BatchCache<K>::num_miss++;
+      } else {
+        typename std::list<RedisLFUNode>::iterator node = it->second;
+        RedisLFUNode node_new(node);
+        uint8_t freq = node->get_cnt();
+        uint8_t freq_new = node_new->updateLFU(global_step);
+        freq_table[freq].first->erase(node);
+        freq_table[freq].second--;
+        if (freq_table[freq].second == 0) {
+          if (min_freq == freq) min_freq = freq_new;
+        }
+        if (freq_new == freq_table.size()) {
+          freq_table.emplace_back(std::pair<std::list<RedisLFUNode>*, int64>(
+              new std::list<RedisLFUNode>, 0));
+        }
+        max_freq = std::max(max_freq, freq_new);
+        min_freq = std::min(min_freq, freq_new);
+        freq_table[freq_new].first->emplace_front(*node_new);
+        freq_table[freq_new].second++;
+        key_table[id] = freq_table[freq].first->begin();
+        BatchCache<K>::num_hit++;
+      }
+    }
+  }
+
+ private:
+  class RedisLFUNode {
+   public:
+    K key;
+    unsigned lfu;
+    RedisLFUNode(K key, unsigned long step)
+        : key(key), lfu((step << 8) | LFU_INIT_VAL) {}
+    RedisLFUNode(RedisLFUNode* that) : key(that->key), lfu(that->lfu) {}
+    unsigned long decrFuncLog(unsigned long period, unsigned long counter) {
+      if (counter > 0 && rand() * TIMES_TO_MAX > RAND_MAX * (period - 500))
+        counter--;
+      return counter;
+    }
+    unsigned long LFUTimeElapsed(unsigned long ldt, unsigned long step) {
+      unsigned long now = step;
+      if (now >= ldt) return now - ldt;
+      return MAX_STEP - ldt + now;
+    }
+    unsigned long LFUDecrAndReturn(unsigned long step) {
+      unsigned long ldt = LDT(this);
+      unsigned long counter = CNT(this);
+      unsigned long period = this->LFUTimeElapsed(ldt, step);
+      return this->decrFuncLog(period, counter);
+    }
+    uint8_t LFULogIncr(uint8_t counter) {
+      if (counter < 255 &&
+          rand() * (counter - LFU_INIT_VAL) * LFU_LOG_FACTOR < RAND_MAX)
+        counter++;
+      return counter;
+    }
+    uint8_t updateLFU(unsigned long step) {
+      step = MOD_STEP(step);
+      unsigned long counter = this->LFUDecrAndReturn(step);
+      counter = this->LFULogIncr(counter);
+      this->lfu = (step << 8) | counter;
+      return counter;
+    }
+    uint8_t get_cnt() { return lfu & 255; }
+    unsigned long get_ldt() { return lfu >> 8; }
+  };
+  time_t global_step;
+  size_t min_freq;
+  size_t max_freq;
+  std::vector<std::pair<std::list<RedisLFUNode>*, int64>> freq_table;
+  std::unordered_map<K, typename std::list<RedisLFUNode>::iterator> key_table;
+  mutex mu_;
+};
+
 } // embedding
 } // tensorflow
 
