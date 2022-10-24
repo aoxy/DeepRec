@@ -4,6 +4,7 @@
 #include <map>
 #include <unordered_map>
 #include <set>
+#include <queue>
 #include <list>
 #include <limits>
 #include "tensorflow/core/framework/tensor.h"
@@ -282,7 +283,8 @@ class LFUCache : public BatchCache<K> {
 template <class K>
 class AutoLRFUCache : public BatchCache<K> {
  public:
-  AutoLFUCache() {
+  AutoLRFUCache(int64 cache_capacity) {
+    cache_capacity_ = cache_capacity;
     global_step = 0;
     key_table.clear();
     freq_table.clear();
@@ -347,8 +349,7 @@ class AutoLRFUCache : public BatchCache<K> {
     if (state == S3 && counter_replacement < HitSpan)
       return;
     else if (counter_replacement <
-             num_replacement *
-                 (SingleCache<K, V>::capacity() + HitSpan))  // TODO:
+             num_replacement * (cache_capacity_ + HitSpan))  // TODO:
       return;
 
     counter_replacement = 0;
@@ -499,6 +500,8 @@ class AutoLRFUCache : public BatchCache<K> {
     inline short get_index() { return this->index; }
   };
 
+  int64 cache_capacity_;
+  mutex mu_;
   time_t global_step;
   std::unordered_map<K, typename std::list<BaseNode*>::iterator> key_table;
   std::unordered_map<short, typename std::list<BaseNode*>> freq_table;
