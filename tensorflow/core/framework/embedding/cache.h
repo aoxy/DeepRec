@@ -339,7 +339,7 @@ class RedisLFUCache : public BatchCache<K> {
         typename std::list<RedisLFUNode>::iterator node = it->second;
         RedisLFUNode node_new(node);
         uint8_t freq = node->get_cnt();
-        uint8_t freq_new = node_new->updateLFU(global_step);
+        uint8_t freq_new = node_new.updateLFU(global_step);
         freq_table[freq].first->erase(node);
         freq_table[freq].second--;
         if (freq_table[freq].second == 0) {
@@ -351,7 +351,7 @@ class RedisLFUCache : public BatchCache<K> {
         }
         max_freq = std::max(max_freq, freq_new);
         min_freq = std::min(min_freq, freq_new);
-        freq_table[freq_new].first->emplace_front(*node_new);
+        freq_table[freq_new].first->emplace_front(node_new);
         freq_table[freq_new].second++;
         key_table[id] = freq_table[freq].first->begin();
         BatchCache<K>::num_hit++;
@@ -373,7 +373,7 @@ class RedisLFUCache : public BatchCache<K> {
     unsigned lfu;
     RedisLFUNode(K key, unsigned long step)
         : key(key), lfu((step << 8) | LFU_INIT_VAL) {}
-    RedisLFUNode(RedisLFUNode* that) : key(that->key), lfu(that->lfu) {}
+    RedisLFUNode(typename std::list<RedisLFUNode>::iterator that) : key(that->key), lfu(that->lfu) {}
     unsigned long decrFuncLog(unsigned long period, unsigned long counter) {
       if (counter > 0 && rand() * TIMES_TO_MAX > RAND_MAX * (period - 500))
         counter--;
@@ -385,8 +385,8 @@ class RedisLFUCache : public BatchCache<K> {
       return MAX_STEP - ldt + now;
     }
     unsigned long LFUDecrAndReturn(unsigned long step) {
-      unsigned long ldt = LDT(this);
-      unsigned long counter = CNT(this);
+      unsigned long ldt = get_ldt();
+      unsigned long counter = get_cnt();
       unsigned long period = this->LFUTimeElapsed(ldt, step);
       return this->decrFuncLog(period, counter);
     }
