@@ -359,6 +359,13 @@ class RedisLFUCache : public BatchCache<K> {
     }
   }
 
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                    const int64* batch_version,
+                    const int64* batch_freqs) {
+    //TODO: add to rank accroding to the version of ids
+    add_to_rank(batch_ids, batch_size);
+  }
+
  private:
   class RedisLFUNode {
    public:
