@@ -286,8 +286,10 @@ class RedisLFUCache : public BatchCache<K> {
   RedisLFUCache() {
     min_freq = 255;
     max_freq = 0;
-    freq_table.emplace_back(std::pair<std::list<RedisLFUNode>*, int64>(
-        new std::list<RedisLFUNode>, 0));
+    for (size_t i = 0; i <= LFU_INIT_VAL; ++i) {
+      freq_table.emplace_back(std::pair<std::list<RedisLFUNode>*, int64>(
+          new std::list<RedisLFUNode>, 0));
+    }
     BatchCache<K>::num_hit = 0;
     BatchCache<K>::num_miss = 0;
   }
@@ -353,7 +355,7 @@ class RedisLFUCache : public BatchCache<K> {
         min_freq = std::min(min_freq, freq_new);
         freq_table[freq_new].first->emplace_front(node_new);
         freq_table[freq_new].second++;
-        key_table[id] = freq_table[freq].first->begin();
+        key_table[id] = freq_table[freq_new].first->begin();
         BatchCache<K>::num_hit++;
       }
     }
