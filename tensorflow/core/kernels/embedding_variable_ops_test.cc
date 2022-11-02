@@ -1177,7 +1177,7 @@ TEST(EmbeddingVariableTest, TestLFUCache) {
 }
 
 TEST(EmbeddingVariableTest, TestAgingLFUCache) {
-  BatchCache<int64>* cache = new RedisLFUCache<int64>();
+  BatchCache<int64>* cache = new AgingLFUCache<int64>();
   int num_ids = 30;
   int num_access = 100;
   int num_evict = 50;

@@ -281,14 +281,14 @@ class LFUCache : public BatchCache<K> {
 #define TIMES_TO_MAX (32640 * LFU_LOG_FACTOR) // 32640 = 1 + 2 + ... + 255
 
 template <class K>
-class RedisLFUCache : public BatchCache<K> {
+class AgingLFUCache : public BatchCache<K> {
  public:
-  RedisLFUCache() {
+  AgingLFUCache() {
     min_freq = 255;
     max_freq = 0;
     for (size_t i = 0; i <= LFU_INIT_VAL; ++i) {
-      freq_table.emplace_back(std::pair<std::list<RedisLFUNode>*, int64>(
-          new std::list<RedisLFUNode>, 0));
+      freq_table.emplace_back(std::pair<std::list<AgingLFUNode>*, int64>(
+          new std::list<AgingLFUNode>, 0));
     }
     BatchCache<K>::num_hit = 0;
     BatchCache<K>::num_miss = 0;
@@ -331,15 +331,15 @@ class RedisLFUCache : public BatchCache<K> {
       auto it = key_table.find(id);
       if (it == key_table.end()) {
         freq_table[LFU_INIT_VAL].first->emplace_front(
-            RedisLFUNode(id, global_step));
+            AgingLFUNode(id, global_step));
         freq_table[LFU_INIT_VAL].second++;
         key_table[id] = freq_table[LFU_INIT_VAL].first->begin();
         min_freq = std::min(min_freq, (uint8_t)LFU_INIT_VAL);
         max_freq = std::max(max_freq, (uint8_t)LFU_INIT_VAL);
         BatchCache<K>::num_miss++;
       } else {
-        typename std::list<RedisLFUNode>::iterator node = it->second;
-        RedisLFUNode node_new(node);
+        typename std::list<AgingLFUNode>::iterator node = it->second;
+        AgingLFUNode node_new(node);
         uint8_t freq = node->get_cnt();
         uint8_t freq_new = node_new.updateLFU(global_step);
         freq_table[freq].first->erase(node);
@@ -348,8 +348,8 @@ class RedisLFUCache : public BatchCache<K> {
           if (min_freq == freq) min_freq = freq_new;
         }
         if (freq_new == freq_table.size()) {
-          freq_table.emplace_back(std::pair<std::list<RedisLFUNode>*, int64>(
-              new std::list<RedisLFUNode>, 0));
+          freq_table.emplace_back(std::pair<std::list<AgingLFUNode>*, int64>(
+              new std::list<AgingLFUNode>, 0));
         }
         max_freq = std::max(max_freq, freq_new);
         min_freq = std::min(min_freq, freq_new);
@@ -369,13 +369,13 @@ class RedisLFUCache : public BatchCache<K> {
   }
 
  private:
-  class RedisLFUNode {
+  class AgingLFUNode {
    public:
     K key;
     unsigned lfu;
-    RedisLFUNode(K key, unsigned long step)
+    AgingLFUNode(K key, unsigned long step)
         : key(key), lfu((step << 8) | LFU_INIT_VAL) {}
-    RedisLFUNode(typename std::list<RedisLFUNode>::iterator that) : key(that->key), lfu(that->lfu) {}
+    AgingLFUNode(typename std::list<AgingLFUNode>::iterator that) : key(that->key), lfu(that->lfu) {}
     unsigned long decrFuncLog(unsigned long period, unsigned long counter) {
       if (counter > 0 && rand() * TIMES_TO_MAX < RAND_MAX * (period - IGNORE_STEP))
         counter--;
@@ -411,8 +411,8 @@ class RedisLFUCache : public BatchCache<K> {
   time_t global_step;
   uint8_t min_freq;
   uint8_t max_freq;
-  std::vector<std::pair<std::list<RedisLFUNode>*, int64>> freq_table;
-  std::unordered_map<K, typename std::list<RedisLFUNode>::iterator> key_table;
+  std::vector<std::pair<std::list<AgingLFUNode>*, int64>> freq_table;
+  std::unordered_map<K, typename std::list<AgingLFUNode>::iterator> key_table;
   mutex mu_;
 };
 
