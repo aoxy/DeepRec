@@ -275,10 +275,10 @@ class LFUCache : public BatchCache<K> {
 
 #define LFU_INIT_VAL 5
 #define LFU_LOG_FACTOR 10
-#define MAX_STEP 16777215
-
-#define MOD_STEP(st) (st & MAX_STEP)  // 2^24-1
-#define TIMES_TO_MAX (32640 * LFU_LOG_FACTOR * LFU_LOG_FACTOR)
+#define MAX_STEP 16777215 // 2^24-1
+#define IGNORE_STEP 0
+#define MOD_STEP(st) (st & MAX_STEP)
+#define TIMES_TO_MAX (32640 * LFU_LOG_FACTOR) // 32640 = 1 + 2 + ... + 255
 
 template <class K>
 class RedisLFUCache : public BatchCache<K> {
@@ -377,7 +377,7 @@ class RedisLFUCache : public BatchCache<K> {
         : key(key), lfu((step << 8) | LFU_INIT_VAL) {}
     RedisLFUNode(typename std::list<RedisLFUNode>::iterator that) : key(that->key), lfu(that->lfu) {}
     unsigned long decrFuncLog(unsigned long period, unsigned long counter) {
-      if (counter > 0 && rand() * TIMES_TO_MAX > RAND_MAX * (period - 500))
+      if (counter > 0 && rand() * TIMES_TO_MAX < RAND_MAX * (period - IGNORE_STEP))
         counter--;
       return counter;
     }
