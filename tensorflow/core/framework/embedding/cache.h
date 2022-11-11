@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <set>
 #include <list>
+#include <deque>
 #include <limits>
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/types.h"
