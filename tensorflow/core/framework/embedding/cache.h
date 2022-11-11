@@ -129,7 +129,7 @@ class LRUCache : public BatchCache<K> {
 };
 
 template <class K>
-class LFUCache : public BatchCache<K> {
+class OriginLFUCache : public BatchCache<K> {
  public:
   LFUCache() {
     min_freq = std::numeric_limits<size_t>::max();
@@ -273,23 +273,87 @@ class LFUCache : public BatchCache<K> {
 };
 
 
-#define LFU_INIT_VAL 5
-#define LFU_LOG_FACTOR 10
-#define MAX_STEP 16777215 // 2^24-1
-#define IGNORE_STEP 0
-#define MOD_STEP(st) (st & MAX_STEP)
-#define TIMES_TO_MAX (32640 * LFU_LOG_FACTOR) // 32640 = 1 + 2 + ... + 255
+template <class K>
+class LFUNode {
+ public:
+  K key;
+  size_t freq;
+  LFUNode(K key, unsigned now) : key(key), freq(0) {}
+  size_t GetIndex() { return freq; }
+  size_t UpdateAndReturnIndex(unsigned now, bool lru_mode) { return ++freq; }
+};
 
 template <class K>
-class AgingLFUCache : public BatchCache<K> {
+class AgingNode {
  public:
-  AgingLFUCache() {
-    min_freq = 255;
+  static const uint8_t INIT_CNT = 5;
+  static const uint8_t MIN_CNT = 1;
+  static const uint8_t MAX_CNT = 255;
+  static const unsigned INCR_FACTOR = 7;
+  static const unsigned DECR_FACTOR = 10;
+  // 32640 = 1 + 2 + ... + 255
+  static const unsigned UNIT_STEP = 32640 * INCR_FACTOR;
+  static const unsigned IGNORE_STEP = 0;
+
+ public:
+  K key;
+  uint8_t count;
+  uint8_t index;
+  unsigned last;
+  AgingNode(K key, unsigned now)
+      : key(key), count(INIT_CNT), index(INIT_CNT), last(now) {}
+  AgingNode(typename std::list<AgingNode>::iterator that)
+      : key(that->key),
+        count(that->count),
+        index(that->index),
+        last(that->last) {}
+  void DecrByProb(unsigned period) {
+    size_t ret1 = rand();
+    size_t ret2 = RAND_MAX;
+    ret1 *= NUIT_STEP * DECR_FACTOR;
+    ret2 *= (period - IGNORE_STEP);
+    if (count > 0 && ret1 < ret2) count--;
+  }
+  void DecrByPeriod(unsigned period) {
+    unsigned decrease_value = period / UNIT_STEP;
+    if (decrease_value + INIT_CNT > count)
+      count = INIT_CNT;
+    else
+      count -= decrease_value;
+  }
+  void Decrease(unsigned now) {
+    unsigned period = now >= last
+                          ? now - last
+                          : std::numeric_limits<size_t>::max() - last + now;
+    DecrByPeriod(period);
+  }
+  void IncrByProb() {
+    size_t ret = rand();
+    ret *= (count - LFU_INIT_VAL) * INCR_FACTOR;
+    if (count < 255 && ret < RAND_MAX) count++;
+  }
+  uint8_t UpdateAndReturnIndex(unsigned now, bool lru_mode) {
+    Decrease(now);
+    IncrByProb();
+    if (lru_mode)
+      index = MAX_CNT;
+    else
+      index = count;
+    return index;
+  }
+};
+
+template <class K, class Node>
+class BaseLFUCache : public BatchCache<K> {
+ public:
+  using map_iter =
+      typename std::unordered_map<K,
+                                  typename std::list<Node>::iterator>::iterator;
+  BaseLFUCache() {
+    min_freq = std::numeric_limits<size_t>::max();
     max_freq = 0;
-    for (size_t i = 0; i <= LFU_INIT_VAL; ++i) {
-      freq_table.emplace_back(std::pair<std::list<AgingLFUNode>*, int64>(
-          new std::list<AgingLFUNode>, 0));
-    }
+    freq_table.emplace_back(
+        std::pair<std::list<Node>*, int64>(new std::list<Node>, 0));
     BatchCache<K>::num_hit = 0;
     BatchCache<K>::num_miss = 0;
   }
@@ -302,18 +366,19 @@ class AgingLFUCache : public BatchCache<K> {
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
     mutex_lock l(mu_);
     size_t true_size = 0;
+    size_t st_freq = min_freq;
     for (size_t i = 0; i < k_size && key_table.size() > 0; ++i) {
-      auto rm_it = freq_table[min_freq].first->back();
+      auto rm_it = freq_table[st_freq].first->back();
       key_table.erase(rm_it.key);
       evic_ids[i] = rm_it.key;
       ++true_size;
-      freq_table[min_freq].first->pop_back();
-      freq_table[min_freq].second--;
-      if (freq_table[min_freq].second == 0) {
-        ++min_freq;
-        while (min_freq <= max_freq) {
-          if (freq_table[min_freq].second == 0) {
-            ++min_freq;
+      freq_table[st_freq].first->pop_back();
+      freq_table[st_freq].second--;
+      if (freq_table[st_freq].second == 0) {
+        ++st_freq;
+        while (st_freq <= max_freq) {
+          if (freq_table[st_freq].second == 0) {
+            ++st_freq;
           } else {
             break;
           }
@@ -323,97 +388,101 @@ class AgingLFUCache : public BatchCache<K> {
     return true_size;
   }
 
+  void AddNode(K id, unsigned now) {
+    Node node(id, now);
+    size_t index = node.GetIndex();
+    freq_table[index].first->emplace_front(node);
+    freq_table[index].second++;
+    key_table[id] = freq_table[index].first->begin();
+    min_freq = std::min(min_freq, index);
+    max_freq = std::max(max_freq, index);
+  }
+
+  void UpdateNode(K id, map_iter it, unsigned now, bool lru_mode) {
+    Node node = (Node)(*(it->second));
+    size_t index = node.GetIndex();
+    freq_table[index].first->erase(it->second);
+    freq_table[index].second--;
+    if (freq_table[index].second == 0) {
+      if (min_freq == index) min_freq += 1;
+    }
+    index = node.UpdateAndReturnIndex(now, lru_mode);
+    if (index == freq_table.size()) {
+      freq_table.emplace_back(
+          std::pair<std::list<Node>*, int64>(new std::list<Node>, 0));
+    }
+    max_freq = std::max(max_freq, index);
+    min_freq = std::min(min_freq, index);
+    freq_table[index].first->emplace_front(node);
+    freq_table[index].second++;
+    key_table[id] = freq_table[index].first->begin();
+  }
+
   void add_to_rank(const K* batch_ids, size_t batch_size) {
     mutex_lock l(mu_);
-    global_step = MOD_STEP(global_step + 1);
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       auto it = key_table.find(id);
       if (it == key_table.end()) {
-        freq_table[LFU_INIT_VAL].first->emplace_front(
-            AgingLFUNode(id, global_step));
-        freq_table[LFU_INIT_VAL].second++;
-        key_table[id] = freq_table[LFU_INIT_VAL].first->begin();
-        min_freq = std::min(min_freq, (uint8_t)LFU_INIT_VAL);
-        max_freq = std::max(max_freq, (uint8_t)LFU_INIT_VAL);
+        AddNode(id, 0);
         BatchCache<K>::num_miss++;
       } else {
-        typename std::list<AgingLFUNode>::iterator node = it->second;
-        AgingLFUNode node_new(node);
-        uint8_t freq = node->get_cnt();
-        uint8_t freq_new = node_new.updateLFU(global_step);
-        freq_table[freq].first->erase(node);
-        freq_table[freq].second--;
-        if (freq_table[freq].second == 0) {
-          if (min_freq == freq) min_freq = freq_new;
-        }
-        if (freq_new == freq_table.size()) {
-          freq_table.emplace_back(std::pair<std::list<AgingLFUNode>*, int64>(
-              new std::list<AgingLFUNode>, 0));
-        }
-        max_freq = std::max(max_freq, freq_new);
-        min_freq = std::min(min_freq, freq_new);
-        freq_table[freq_new].first->emplace_front(node_new);
-        freq_table[freq_new].second++;
-        key_table[id] = freq_table[freq_new].first->begin();
+        UpdateNode(id, it, 0, false);
         BatchCache<K>::num_hit++;
       }
     }
   }
 
   void add_to_rank(const K* batch_ids, size_t batch_size,
-                    const int64* batch_version,
-                    const int64* batch_freqs) {
-    //TODO: add to rank accroding to the version of ids
+                   const int64* batch_version, const int64* batch_freqs) {
+    // TODO: add to rank accroding to the version of ids
     add_to_rank(batch_ids, batch_size);
   }
 
- private:
-  class AgingLFUNode {
-   public:
-    K key;
-    unsigned lfu;
-    AgingLFUNode(K key, unsigned long step)
-        : key(key), lfu((step << 8) | LFU_INIT_VAL) {}
-    AgingLFUNode(typename std::list<AgingLFUNode>::iterator that) : key(that->key), lfu(that->lfu) {}
-    unsigned long decrFuncLog(unsigned long period, unsigned long counter) {
-      if (counter > 0 && rand() * TIMES_TO_MAX < RAND_MAX * (period - IGNORE_STEP))
-        counter--;
-      return counter;
-    }
-    unsigned long LFUTimeElapsed(unsigned long ldt, unsigned long step) {
-      unsigned long now = step;
-      if (now >= ldt) return now - ldt;
-      return MAX_STEP - ldt + now;
-    }
-    unsigned long LFUDecrAndReturn(unsigned long step) {
-      unsigned long ldt = get_ldt();
-      unsigned long counter = get_cnt();
-      unsigned long period = this->LFUTimeElapsed(ldt, step);
-      return this->decrFuncLog(period, counter);
-    }
-    uint8_t LFULogIncr(uint8_t counter) {
-      if (counter < 255 &&
-          rand() * (counter - LFU_INIT_VAL) * LFU_LOG_FACTOR < RAND_MAX)
-        counter++;
-      return counter;
-    }
-    uint8_t updateLFU(unsigned long step) {
-      step = MOD_STEP(step);
-      unsigned long counter = this->LFUDecrAndReturn(step);
-      counter = this->LFULogIncr(counter);
-      this->lfu = (step << 8) | counter;
-      return counter;
-    }
-    uint8_t get_cnt() { return lfu & 255; }
-    unsigned long get_ldt() { return lfu >> 8; }
-  };
-  time_t global_step;
-  uint8_t min_freq;
-  uint8_t max_freq;
-  std::vector<std::pair<std::list<AgingLFUNode>*, int64>> freq_table;
-  std::unordered_map<K, typename std::list<AgingLFUNode>::iterator> key_table;
+ protected:
+  size_t min_freq;
+  size_t max_freq;
+  std::vector<std::pair<std::list<Node>*, int64>> freq_table;
+  std::unordered_map<K, typename std::list<Node>::iterator> key_table;
   mutex mu_;
+};
+
+template <class K>
+class LFUCache : public BaseLFUCache<K, LFUNode> {
+ public:
+  LFUCache() : BaseLFUCache<K, LFUNode>() {}
+};
+
+template <class K>
+class AgingLFUCache : public LFUCache<K, AgingNode> {
+ public:
+  AgingLFUCache() : BaseLFUCache<K, AgingNode>() { global_step = 0; }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size) {
+    mutex_lock l(BaseLFUCache<K, AgingNode>::mu_);
+    for (size_t i = 0; i < batch_size; ++i) {
+      if (global_step == std::numeric_limits<size_t>::max();) global_step = 0;
+      global_step++;
+      K id = batch_ids[i];
+      auto it = AgingLFUCache<K>::key_table.find(id);
+      if (it == AgingLFUCache<K>::key_table.end()) {
+        AddNode(id, global_step);
+        BatchCache<K>::num_miss++;
+      } else {
+        UpdateNode(id, it, global_step, false);
+        BatchCache<K>::num_hit++;
+      }
+    }
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                   const int64* batch_version, const int64* batch_freqs) {
+    // TODO: add to rank accroding to the version of ids
+    add_to_rank(batch_ids, batch_size);
+  }
+
+ protected:
+  size_t global_step;
 };
 
 } // embedding
