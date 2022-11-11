@@ -500,8 +500,6 @@ class AutoLRFUCache : public AgingLFUCache<K> {
     cache_capacity_ = cache_capacity;
     state = F0;
     lru_mode = false;
-    span_last_check = 0;
-    counter_switch = 0;
     prev_hit_rate = -100;
     counter_replacement = 0;
     num_replacement = 1;
@@ -631,12 +629,9 @@ class AutoLRFUCache : public AgingLFUCache<K> {
 
   int64 cache_capacity_;
   std::deque<bool> hit_recent;
-  short HitSpan;  // 每span次查看
-  size_t span_last_check;
-  size_t counter_switch;
+  unsigned HitSpan;  // 每span次查看
   size_t counter_replacement;
-  size_t counter_visit;
-  int num_replacement;
+  unsigned num_replacement;
   int prev_hit_rate;
   bool lru_mode;
   State state;
