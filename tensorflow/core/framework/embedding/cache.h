@@ -492,6 +492,154 @@ class AgingLFUCache : public BaseLFUCache<K, AgingNode<K>> {
   size_t global_step;
 };
 
+template <class K>
+class AutoLRFUCache : public AgingLFUCache<K> {
+ public:
+  AutoLRFUCache(int64 cache_capacity) : AgingLFUCache<K>() {
+    cache_capacity_ = cache_capacity;
+    state = F0;
+    lru_mode = false;
+    span_last_check = 0;
+    counter_switch = 0;
+    prev_hit_rate = -100;
+    counter_replacement = 0;
+    num_replacement = 1;
+    HitSpan = 1000;
+  }
+
+  void rebuild() {
+    if (lru_mode) return;
+    std::unordered_map<K, AgingNode<K>> new_table;
+    for (auto it = this->key_table.begin(); it != this->key_table.end(); it++) {
+      AgingNode<K> node = (AgingNode<K>)(*(it->second));
+      node.UpdateAndReturnIndex(this->global_step, lru_mode);
+      new_table[node.GetIndex()] = node;
+    }
+    this->freq_table.clear();
+    this->key_table.clear();
+    for (auto it = new_table.begin(); it != new_table.end(); it++) {
+      AgingNode<K> node = (AgingNode<K>)(*(it->second));
+      this->freq_table[node.GetIndex()].first->emplace_front(node);
+      this->freq_table[node.GetIndex()].second++;
+      this->key_table[node.key] =
+          this->freq_table[node.GetIndex()].first->begin();
+    }
+  }
+
+  int get_hit_rate_len_100000(int len) {
+    int total = hit_recent.size();
+    if (total <= 0) return 0.0;
+    int hit = 0;
+    for (auto it = hit_recent.begin(); it != hit_recent.end(); it++)
+      hit += (len-- > 0) && (*it);
+    if (hit == 0) return 0.0;
+    return int(hit * 100000 / total);
+  }
+
+  int get_hit_rate100000() {
+    int total = hit_recent.size();
+    if (total <= 0) return 0.0;
+    int hit = 0;
+    for (auto it = hit_recent.begin(); it != hit_recent.end(); it++) hit += *it;
+    if (hit == 0) return 0.0;
+    return int(hit * 100000 / total);
+  }
+
+  void mode_switch() {
+    if (lru_mode) {
+      lru_mode = false;
+      rebuild();  // 根据保存的频次信息，重新构建链表
+    } else {
+      lru_mode = true;
+    }
+  }
+
+  void auto_switch() {
+    if (state == S3 && counter_replacement < HitSpan)
+      return;
+    else if (counter_replacement <
+             num_replacement * (cache_capacity_ + HitSpan))  // TODO:
+      return;
+
+    counter_replacement = 0;
+    int curr_hit_rate = get_hit_rate100000();
+    if (state == F0) {
+      if (prev_hit_rate >= 0 && curr_hit_rate < prev_hit_rate * 0.85) {
+        // (prev_hit_rate - curr_hit_rate) / prev_hit_rate > 0.15
+        mode_switch();
+        state = S1;
+      }
+    } else if (state == S1) {
+      if (curr_hit_rate <= 1.15 * prev_hit_rate) {  //没有显著提高
+        mode_switch();
+        state = F0;
+      } else {
+        state = S2;
+      }
+    } else if (state == S2) {
+      mode_switch();
+      state = S3;
+    } else if (state == S3) {
+      curr_hit_rate = get_hit_rate_len_100000(HitSpan);
+      if (curr_hit_rate > prev_hit_rate) {
+        state = F0;
+        num_replacement = 1;
+      } else {
+        mode_switch();
+        state = S2;
+        num_replacement = num_replacement * 2;
+      }
+    }
+    if (state != S3) prev_hit_rate = curr_hit_rate;
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size) {
+    mutex_lock l(this->mu_);
+    for (size_t i = 0; i < batch_size; ++i) {
+      auto_switch();
+      if (this->global_step == std::numeric_limits<size_t>::max())
+        this->global_step = 0;
+      this->global_step++;
+      if (hit_recent.size() > 6000) {
+        hit_recent.pop_back();
+      }
+
+      K id = batch_ids[i];
+      auto it = this->key_table.find(id);
+      if (it != this->key_table.end()) {
+        hit_recent.push_front(true);
+        this->AddNode(id, this->global_step);
+        BatchCache<K>::num_miss++;
+      } else {
+        hit_recent.push_front(false);
+        counter_replacement++;
+        this->UpdateNode(id, it, this->global_step, lru_mode);
+        BatchCache<K>::num_hit++;
+      }
+    }
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                   const int64* batch_version, const int64* batch_freqs) {
+    // TODO: add to rank accroding to the version of ids
+    add_to_rank(batch_ids, batch_size);
+  }
+
+ private:
+  enum State { F0, S1, S2, S3 };
+
+  int64 cache_capacity_;
+  std::deque<bool> hit_recent;
+  short HitSpan;  // 每span次查看
+  size_t span_last_check;
+  size_t counter_switch;
+  size_t counter_replacement;
+  size_t counter_visit;
+  int num_replacement;
+  int prev_hit_rate;
+  bool lru_mode;
+  State state;
+};
 } // embedding
 } // tensorflow
 
