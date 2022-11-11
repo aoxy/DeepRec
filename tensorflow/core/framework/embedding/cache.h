@@ -4,8 +4,8 @@
 #include <map>
 #include <unordered_map>
 #include <set>
-#include <queue>
 #include <list>
+#include <deque>
 #include <limits>
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/types.h"
@@ -460,7 +460,7 @@ class AgingLFUCache : public BaseLFUCache<K, AgingNode<K>> {
  public:
   AgingLFUCache() : BaseLFUCache<K, AgingNode<K>>() { 
     global_step = 0;
-    for (size_t i = 0; i <= AgingNode<K>::INIT_CNT; ++i) {
+    for (size_t i = 0; i < AgingNode<K>::MAX_CNT; ++i) {
       this->freq_table.emplace_back(std::pair<std::list<AgingNode<K>>*, int64>(
           new std::list<AgingNode<K>>, 0));
     }
@@ -510,20 +510,20 @@ class AutoLRFUCache : public AgingLFUCache<K> {
 
   void rebuild() {
     if (lru_mode) return;
-    std::unordered_map<K, AgingNode<K>> new_table;
+    std::unordered_map<K, AgingNode<K>*> new_table;
     for (auto it = this->key_table.begin(); it != this->key_table.end(); it++) {
-      AgingNode<K> node = (AgingNode<K>)(*(it->second));
-      node.UpdateAndReturnIndex(this->global_step, lru_mode);
-      new_table[node.GetIndex()] = node;
+      AgingNode<K>* node = new AgingNode<K>(it->second);
+      node->UpdateAndReturnIndex(this->global_step, lru_mode);
+      new_table[node->GetIndex()] = node;
     }
     this->freq_table.clear();
     this->key_table.clear();
     for (auto it = new_table.begin(); it != new_table.end(); it++) {
-      AgingNode<K> node = (AgingNode<K>)(*(it->second));
-      this->freq_table[node.GetIndex()].first->emplace_front(node);
-      this->freq_table[node.GetIndex()].second++;
-      this->key_table[node.key] =
-          this->freq_table[node.GetIndex()].first->begin();
+      AgingNode<K> *node = (AgingNode<K>*)(it->second);
+      this->freq_table[node->GetIndex()].first->emplace_front(*node);
+      this->freq_table[node->GetIndex()].second++;
+      this->key_table[node->key] =
+          this->freq_table[node->GetIndex()].first->begin();
     }
   }
 
@@ -607,7 +607,7 @@ class AutoLRFUCache : public AgingLFUCache<K> {
 
       K id = batch_ids[i];
       auto it = this->key_table.find(id);
-      if (it != this->key_table.end()) {
+      if (it == this->key_table.end()) {
         hit_recent.push_front(true);
         this->AddNode(id, this->global_step);
         BatchCache<K>::num_miss++;
