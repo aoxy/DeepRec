@@ -131,7 +131,7 @@ class LRUCache : public BatchCache<K> {
 template <class K>
 class OriginLFUCache : public BatchCache<K> {
  public:
-  LFUCache() {
+  OriginLFUCache() {
     min_freq = std::numeric_limits<size_t>::max();
     max_freq = 0;
     freq_table.emplace_back(std::pair<std::list<LFUNode>*, int64>(
@@ -310,7 +310,7 @@ class AgingNode {
   void DecrByProb(unsigned period) {
     size_t ret1 = rand();
     size_t ret2 = RAND_MAX;
-    ret1 *= NUIT_STEP * DECR_FACTOR;
+    ret1 *= UNIT_STEP * DECR_FACTOR;
     ret2 *= (period - IGNORE_STEP);
     if (count > 0 && ret1 < ret2) count--;
   }
@@ -329,7 +329,7 @@ class AgingNode {
   }
   void IncrByProb() {
     size_t ret = rand();
-    ret *= (count - LFU_INIT_VAL) * INCR_FACTOR;
+    ret *= (count - INIT_CNT) * INCR_FACTOR;
     if (count < 255 && ret < RAND_MAX) count++;
   }
   uint8_t UpdateAndReturnIndex(unsigned now, bool lru_mode) {
@@ -341,6 +341,7 @@ class AgingNode {
       index = count;
     return index;
   }
+  size_t GetIndex() { return index; }
 };
 
 template <class K, class Node>
@@ -448,28 +449,34 @@ class BaseLFUCache : public BatchCache<K> {
 };
 
 template <class K>
-class LFUCache : public BaseLFUCache<K, LFUNode> {
+class LFUCache : public BaseLFUCache<K, LFUNode<K>> {
  public:
-  LFUCache() : BaseLFUCache<K, LFUNode>() {}
+  LFUCache() : BaseLFUCache<K, LFUNode<K>>() {}
 };
 
 template <class K>
-class AgingLFUCache : public LFUCache<K, AgingNode> {
+class AgingLFUCache : public BaseLFUCache<K, AgingNode<K>> {
  public:
-  AgingLFUCache() : BaseLFUCache<K, AgingNode>() { global_step = 0; }
+  AgingLFUCache() : BaseLFUCache<K, AgingNode<K>>() { 
+    global_step = 0;
+    for (size_t i = 0; i <= AgingNode<K>::INIT_CNT; ++i) {
+      this->freq_table.emplace_back(std::pair<std::list<AgingNode<K>>*, int64>(
+          new std::list<AgingNode<K>>, 0));
+    }
+  }
 
   void add_to_rank(const K* batch_ids, size_t batch_size) {
-    mutex_lock l(BaseLFUCache<K, AgingNode>::mu_);
+    mutex_lock l(this->mu_);
     for (size_t i = 0; i < batch_size; ++i) {
-      if (global_step == std::numeric_limits<size_t>::max();) global_step = 0;
+      if (global_step == std::numeric_limits<size_t>::max()) global_step = 0;
       global_step++;
       K id = batch_ids[i];
-      auto it = AgingLFUCache<K>::key_table.find(id);
-      if (it == AgingLFUCache<K>::key_table.end()) {
-        AddNode(id, global_step);
+      auto it = this->key_table.find(id);
+      if (it == this->key_table.end()) {
+        this->AddNode(id, global_step);
         BatchCache<K>::num_miss++;
       } else {
-        UpdateNode(id, it, global_step, false);
+        this->UpdateNode(id, it, global_step, false);
         BatchCache<K>::num_hit++;
       }
     }
