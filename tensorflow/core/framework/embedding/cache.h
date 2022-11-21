@@ -290,15 +290,15 @@ class LFUNode {
 };
 
 template <class K>
-class AgingNode : public LFUNode<K> { {
+class AgingNode : public LFUNode<K> {
  public:
   AgingNode(K key, unsigned now)
       : LFUNode<K>(key, now), count(INIT_CNT), index(INIT_CNT), last(now) {}
-  // AgingNode(typename std::list<AgingNode>::iterator that)
-  //     : key(that->key),
-  //       count(that->count),
-  //       index(that->index),
-  //       last(that->last) {}
+  AgingNode(typename std::list<AgingNode>::iterator that)
+      : LFUNode<K>(that->key, that->last),
+        count(that->count),
+        index(that->index),
+        last(that->last) {}
   ~AgingNode() {}
   size_t GetIndex() { return index; }
   size_t UpdateAndReturnIndex(unsigned now, bool lru_mode) {
@@ -580,8 +580,9 @@ class AutoLRFUCache : public AgingLFUCache<K> {
   }
 
   void auto_switch() {
-    if (state == S3 && counter_replacement < FAST_CHECK_SPAN)
-        || (counter_replacement < factor_replacement * cache_capacity_) return;
+    if ((state == S3 && counter_replacement < FAST_CHECK_SPAN) ||
+        (counter_replacement < factor_replacement * cache_capacity_))
+      return;
     counter_replacement = 0;
     int curr_hit_rate = get_hit_rate100000(0);
     if (state == F0) {
