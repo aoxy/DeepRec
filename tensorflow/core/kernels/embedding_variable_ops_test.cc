@@ -1183,6 +1183,7 @@ TEST(EmbeddingVariableTest, TestAgingLFUCache) {
   int num_evict = 50;
   int64 ids[num_access] = {0};
   int64 evict_ids[num_evict] = {0};
+  bool evict_ids_map[num_ids] = {false};
   for (int i = 0; i < num_access; i++){
     ids[i] = i % num_ids;
   }
@@ -1190,9 +1191,13 @@ TEST(EmbeddingVariableTest, TestAgingLFUCache) {
   int64 size = cache->get_evic_ids(evict_ids, num_evict);
   ASSERT_EQ(size, num_ids);
   ASSERT_EQ(cache->size(), 0);
-  // for (int i = 0; i < size; i++) {
-  //   ASSERT_EQ(evict_ids[i], (num_access % num_ids + i) % num_ids);
-  // }
+  for (int i = 0; i < num_ids; i++) {
+    ASSERT_EQ(evict_ids[i] < num_ids, true);
+    evict_ids_map[evict_ids[i]] = true;
+  }
+  for (int id = 0; id < num_ids; id++) {
+    ASSERT_EQ(evict_ids_map[id], true);
+  }
 }
 
 TEST(EmbeddingVariableTest, TestAutoLRFUCache) {
@@ -1202,6 +1207,7 @@ TEST(EmbeddingVariableTest, TestAutoLRFUCache) {
   int num_evict = 50;
   int64 ids[num_access] = {0};
   int64 evict_ids[num_evict] = {0};
+  bool evict_ids_map[num_ids] = {false};
   for (int i = 0; i < num_access; i++){
     ids[i] = i % num_ids;
   }
@@ -1209,9 +1215,13 @@ TEST(EmbeddingVariableTest, TestAutoLRFUCache) {
   int64 size = cache->get_evic_ids(evict_ids, num_evict);
   ASSERT_EQ(size, num_ids);
   ASSERT_EQ(cache->size(), 0);
-  // for (int i = 0; i < size; i++) {
-  //   ASSERT_EQ(evict_ids[i], (num_access % num_ids + i) % num_ids);
-  // }
+  for (int i = 0; i < num_ids; i++) {
+    ASSERT_EQ(evict_ids[i] < num_ids, true);
+    evict_ids_map[evict_ids[i]] = true;
+  }
+  for (int id = 0; id < num_ids; id++) {
+    ASSERT_EQ(evict_ids_map[id], true);
+  }
 }
 
 TEST(EmbeddingVariableTest, TestCacheRestore) {

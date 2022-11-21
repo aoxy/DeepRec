@@ -129,6 +129,8 @@ class LRUCache : public BatchCache<K> {
   mutex mu_;
 };
 
+/* Use real frequencies, from 1 to max value of size_t.
+   Independent implementation. */
 template <class K>
 class OriginLFUCache : public BatchCache<K> {
  public:
@@ -277,37 +279,37 @@ class OriginLFUCache : public BatchCache<K> {
 template <class K>
 class LFUNode {
  public:
-  K key;
-  size_t freq;
   LFUNode(K key, unsigned now) : key(key), freq(0) {}
+  ~LFUNode() {}
+  K GetKey() { return key; }
   size_t GetIndex() { return freq; }
   size_t UpdateAndReturnIndex(unsigned now, bool lru_mode) { return ++freq; }
+ private:
+  K key;
+  size_t freq;
 };
 
 template <class K>
-class AgingNode {
+class AgingNode : public LFUNode<K> { {
  public:
-  static const uint8_t INIT_CNT = 5;
-  static const uint8_t MIN_CNT = 1;
-  static const uint8_t MAX_CNT = 255;
-  static const unsigned INCR_FACTOR = 7;
-  static const unsigned DECR_FACTOR = 10;
-  // 32640 = 1 + 2 + ... + 255
-  static const unsigned UNIT_STEP = 32640 * INCR_FACTOR;
-  static const unsigned IGNORE_STEP = 0;
-
- public:
-  K key;
-  uint8_t count;
-  uint8_t index;
-  unsigned last;
   AgingNode(K key, unsigned now)
-      : key(key), count(INIT_CNT), index(INIT_CNT), last(now) {}
-  AgingNode(typename std::list<AgingNode>::iterator that)
-      : key(that->key),
-        count(that->count),
-        index(that->index),
-        last(that->last) {}
+      : LFUNode<K>(key, now), count(INIT_CNT), index(INIT_CNT), last(now) {}
+  // AgingNode(typename std::list<AgingNode>::iterator that)
+  //     : key(that->key),
+  //       count(that->count),
+  //       index(that->index),
+  //       last(that->last) {}
+  ~AgingNode() {}
+  size_t GetIndex() { return index; }
+  size_t UpdateAndReturnIndex(unsigned now, bool lru_mode) {
+    Decrease(now);
+    IncrByProb();
+    index = lru_mode ? MAX_CNT : count;
+    return (size_t)index;
+  }
+  static const uint8_t INIT_CNT = 5;
+
+ private:
   void DecrByProb(unsigned period) {
     size_t ret1 = rand();
     size_t ret2 = RAND_MAX;
@@ -333,24 +335,26 @@ class AgingNode {
     ret *= (count - INIT_CNT) * INCR_FACTOR;
     if (count < 255 && ret < RAND_MAX) count++;
   }
-  uint8_t UpdateAndReturnIndex(unsigned now, bool lru_mode) {
-    Decrease(now);
-    IncrByProb();
-    if (lru_mode)
-      index = MAX_CNT;
-    else
-      index = count;
-    return index;
-  }
-  size_t GetIndex() { return index; }
+
+ private:
+  static const uint8_t MIN_CNT = 1;
+  static const uint8_t MAX_CNT = 255;
+  static const unsigned INCR_FACTOR = 7;
+  static const unsigned DECR_FACTOR = 10;
+  // 32640 = 1 + 2 + ... + 255
+  static const unsigned UNIT_STEP = 32640 * INCR_FACTOR;
+  static const unsigned IGNORE_STEP = 0;
+  K key;
+  uint8_t count;
+  uint8_t index;
+  unsigned last;
 };
 
 template <class K, class Node>
 class BaseLFUCache : public BatchCache<K> {
  public:
-  using map_iter =
-      typename std::unordered_map<K,
-                                  typename std::list<Node>::iterator>::iterator;
+  using map_iter = typename std::unordered_map<
+        K, typename std::list<Node>::iterator>::iterator;
   BaseLFUCache() {
     min_freq = std::numeric_limits<size_t>::max();
     max_freq = 0;
@@ -371,8 +375,8 @@ class BaseLFUCache : public BatchCache<K> {
     size_t st_freq = min_freq;
     for (size_t i = 0; i < k_size && key_table.size() > 0; ++i) {
       auto rm_it = freq_table[st_freq].first->back();
-      key_table.erase(rm_it.key);
-      evic_ids[i] = rm_it.key;
+      key_table.erase(rm_it.GetKey());
+      evic_ids[i] = rm_it.GetKey();
       ++true_size;
       freq_table[st_freq].first->pop_back();
       freq_table[st_freq].second--;
@@ -460,7 +464,7 @@ class AgingLFUCache : public BaseLFUCache<K, AgingNode<K>> {
  public:
   AgingLFUCache() : BaseLFUCache<K, AgingNode<K>>() { 
     global_step = 0;
-    for (size_t i = 0; i < AgingNode<K>::MAX_CNT; ++i) {
+    for (size_t i = 0; i < AgingNode<K>::INIT_CNT; ++i) {
       this->freq_table.emplace_back(std::pair<std::list<AgingNode<K>>*, int64>(
           new std::list<AgingNode<K>>, 0));
     }
@@ -496,101 +500,14 @@ class AgingLFUCache : public BaseLFUCache<K, AgingNode<K>> {
 template <class K>
 class AutoLRFUCache : public AgingLFUCache<K> {
  public:
-  AutoLRFUCache(int64 cache_capacity) : AgingLFUCache<K>() {
-    cache_capacity_ = cache_capacity;
-    state = F0;
-    lru_mode = false;
-    prev_hit_rate = -100;
-    counter_replacement = 0;
-    num_replacement = 1;
-    HitSpan = 1000;
-  }
-
-  void rebuild() {
-    if (lru_mode) return;
-    std::unordered_map<K, AgingNode<K>*> new_table;
-    for (auto it = this->key_table.begin(); it != this->key_table.end(); it++) {
-      AgingNode<K>* node = new AgingNode<K>(it->second);
-      node->UpdateAndReturnIndex(this->global_step, lru_mode);
-      new_table[node->GetIndex()] = node;
-    }
-    this->freq_table.clear();
-    this->key_table.clear();
-    for (auto it = new_table.begin(); it != new_table.end(); it++) {
-      AgingNode<K> *node = (AgingNode<K>*)(it->second);
-      this->freq_table[node->GetIndex()].first->emplace_front(*node);
-      this->freq_table[node->GetIndex()].second++;
-      this->key_table[node->key] =
-          this->freq_table[node->GetIndex()].first->begin();
-    }
-  }
-
-  int get_hit_rate_len_100000(int len) {
-    int total = hit_recent.size();
-    if (total <= 0) return 0.0;
-    int hit = 0;
-    for (auto it = hit_recent.begin(); it != hit_recent.end(); it++)
-      hit += (len-- > 0) && (*it);
-    if (hit == 0) return 0.0;
-    return int(hit * 100000 / total);
-  }
-
-  int get_hit_rate100000() {
-    int total = hit_recent.size();
-    if (total <= 0) return 0.0;
-    int hit = 0;
-    for (auto it = hit_recent.begin(); it != hit_recent.end(); it++) hit += *it;
-    if (hit == 0) return 0.0;
-    return int(hit * 100000 / total);
-  }
-
-  void mode_switch() {
-    if (lru_mode) {
-      lru_mode = false;
-      rebuild();  // 根据保存的频次信息，重新构建链表
-    } else {
-      lru_mode = true;
-    }
-  }
-
-  void auto_switch() {
-    if (state == S3 && counter_replacement < HitSpan)
-      return;
-    else if (counter_replacement <
-             num_replacement * (cache_capacity_ + HitSpan))  // TODO:
-      return;
-
-    counter_replacement = 0;
-    int curr_hit_rate = get_hit_rate100000();
-    if (state == F0) {
-      if (prev_hit_rate >= 0 && curr_hit_rate < prev_hit_rate * 0.85) {
-        // (prev_hit_rate - curr_hit_rate) / prev_hit_rate > 0.15
-        mode_switch();
-        state = S1;
-      }
-    } else if (state == S1) {
-      if (curr_hit_rate <= 1.15 * prev_hit_rate) {  //没有显著提高
-        mode_switch();
-        state = F0;
-      } else {
-        state = S2;
-      }
-    } else if (state == S2) {
-      mode_switch();
-      state = S3;
-    } else if (state == S3) {
-      curr_hit_rate = get_hit_rate_len_100000(HitSpan);
-      if (curr_hit_rate > prev_hit_rate) {
-        state = F0;
-        num_replacement = 1;
-      } else {
-        mode_switch();
-        state = S2;
-        num_replacement = num_replacement * 2;
-      }
-    }
-    if (state != S3) prev_hit_rate = curr_hit_rate;
-  }
+  AutoLRFUCache(int64 cache_capacity)
+        : AgingLFUCache<K>(),
+          cache_capacity_(cache_capacity),
+          state(F0),
+          lru_mode(false),
+          prev_hit_rate(-100),
+          counter_replacement(0),
+          factor_replacement(1) {}
 
   void add_to_rank(const K* batch_ids, size_t batch_size) {
     mutex_lock l(this->mu_);
@@ -599,10 +516,9 @@ class AutoLRFUCache : public AgingLFUCache<K> {
       if (this->global_step == std::numeric_limits<size_t>::max())
         this->global_step = 0;
       this->global_step++;
-      if (hit_recent.size() > 6000) {
+      if (hit_recent.size() > NORMAL_CHECK_SPAN) {
         hit_recent.pop_back();
       }
-
       K id = batch_ids[i];
       auto it = this->key_table.find(id);
       if (it == this->key_table.end()) {
@@ -625,13 +541,88 @@ class AutoLRFUCache : public AgingLFUCache<K> {
   }
 
  private:
-  enum State { F0, S1, S2, S3 };
+  void rebuild() {
+    if (lru_mode) return;
+    std::unordered_map<K, AgingNode<K>*> new_table;
+    for (auto it = this->key_table.begin(); it != this->key_table.end(); it++) {
+      AgingNode<K>* node = new AgingNode<K>(it->second);
+      node->UpdateAndReturnIndex(this->global_step, lru_mode);
+      new_table[node->GetIndex()] = node;
+    }
+    this->freq_table.clear();
+    this->key_table.clear();
+    for (auto it = new_table.begin(); it != new_table.end(); it++) {
+      AgingNode<K> *node = (AgingNode<K>*)(it->second);
+      this->freq_table[node->GetIndex()].first->emplace_front(*node);
+      this->freq_table[node->GetIndex()].second++;
+      this->key_table[node->GetKey()] =
+          this->freq_table[node->GetIndex()].first->begin();
+    }
+  }
 
+  int get_hit_rate100000(int len = 0) {
+    int total = hit_recent.size();
+    if (total <= 0) return 0.0;
+    if (len <= 0) len = total;
+    int hit = 0;
+    for (auto it = hit_recent.begin(); len-- >0 && it != hit_recent.end(); it++)
+      if(*it) ++hit;
+    return int(hit * 100000 / total);
+  }
+
+  void mode_switch() {
+    if (lru_mode) {
+      lru_mode = false;
+      rebuild();
+    } else {
+      lru_mode = true;
+    }
+  }
+
+  void auto_switch() {
+    if (state == S3 && counter_replacement < FAST_CHECK_SPAN)
+        || (counter_replacement < factor_replacement * cache_capacity_) return;
+    counter_replacement = 0;
+    int curr_hit_rate = get_hit_rate100000(0);
+    if (state == F0) {
+      // Switch to LRU mode if the hit rate decreased significantly(15%).
+      if (prev_hit_rate >= 0 && curr_hit_rate < prev_hit_rate * 0.85) {
+        mode_switch();
+        state = S1;
+      }
+    } else if (state == S1) {
+      // Switch back to LFU mode if the hit rate did not increase significantly(15%).
+      if (curr_hit_rate <= 1.15 * prev_hit_rate) {
+        mode_switch();
+        state = F0;
+      } else {
+        state = S2;
+      }
+    } else if (state == S2) {
+      mode_switch();
+      state = S3;
+    } else if (state == S3) {
+      curr_hit_rate = get_hit_rate100000(FAST_CHECK_SPAN);
+      if (curr_hit_rate > prev_hit_rate) {
+        state = F0;
+        factor_replacement = 1;
+      } else {
+        mode_switch();
+        state = S2;
+        factor_replacement = factor_replacement * 2;
+      }
+    }
+    if (state != S3) prev_hit_rate = curr_hit_rate;
+  }
+
+ private:
+  enum State { F0, S1, S2, S3 };
   int64 cache_capacity_;
   std::deque<bool> hit_recent;
-  unsigned HitSpan;  // 每span次查看
+  static const unsigned FAST_CHECK_SPAN = 1000;
+  static const unsigned NORMAL_CHECK_SPAN = 5000;
   size_t counter_replacement;
-  unsigned num_replacement;
+  unsigned factor_replacement;
   int prev_hit_rate;
   bool lru_mode;
   State state;
