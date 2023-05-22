@@ -41,6 +41,7 @@ limitations under the License.
 #include "tensorflow/core/grappler/optimizers/remapper.h"
 #include "tensorflow/core/grappler/optimizers/concat_cast_fusing.h"
 #include "tensorflow/core/grappler/optimizers/multi_stream_optimizer.h"
+#include "tensorflow/core/grappler/optimizers/dice_fusion.h"
 #include "tensorflow/core/grappler/optimizers/scoped_allocator_optimizer.h"
 #include "tensorflow/core/grappler/optimizers/shape_optimizer.h"
 #include "tensorflow/core/grappler/utils/canonicalizer.h"
@@ -178,6 +179,15 @@ bool MemoryOptimizerEnabled(
   return mem_opt_type != RewriterConfig::NO_MEM_OPT;
 }
 
+// A helper function to decide whether to enable the dice fusion optimizer.
+bool DiceFusionEnabled() {
+  bool is_enabled = true;
+  bool is_inference = false;
+  TF_CHECK_OK(ReadBoolFromEnvVar("TF_DICE_FUSION", true, &is_enabled));
+  TF_CHECK_OK(ReadBoolFromEnvVar("INFERENCE_MODE", false, &is_inference));
+  return is_enabled && is_inference;
+}
+
 }  // namespace
 
 #define MK_OPT(NAME, VALUE) \
@@ -213,6 +223,7 @@ std::unique_ptr<GraphOptimizer> MetaOptimizer::MakeNewOptimizer(
                                       cfg_.scoped_allocator_opts()));
   MK_OPT("pin_to_host",
          new PinToHostOptimizer(cfg_.pin_to_host_optimization()));
+  MK_OPT("dice_fusion", new DiceFusion());
   MK_OPT("concat_cast_fusing", new ConcatCastFusing());
   MK_OPT("use_multi_stream",
          new MultiStreamOptimizer(cfg_.multi_stream_opts()));
@@ -311,7 +322,9 @@ Status MetaOptimizer::InitializeOptimizers(
     optimizers->push_back(MakeUnique<ScopedAllocatorOptimizer>(
         cfg_.scoped_allocator_optimization(), cfg_.scoped_allocator_opts()));
   }
-
+  if (DiceFusionEnabled()) {
+    optimizers->push_back(MakeUnique<DiceFusion>());
+  }
   optimizers->push_back(MakeUnique<ConcatCastFusing>());
   return InitializeCustomGraphOptimizers(std::set<string>(), optimizers);
 }
@@ -320,6 +333,11 @@ Status MetaOptimizer::InitializeOptimizersByName(
     std::vector<std::unique_ptr<GraphOptimizer>>* optimizers) const {
   std::set<string> initialized_custom_optimizers;
   for (const string& optimizer_name : cfg_.optimizers()) {
+    if (optimizer_name == "TensorRTOptimizer" &&
+        cfg_.disable_trt() == RewriterConfig::ON) {
+      continue;
+    }
+
     auto optimizer = MakeNewOptimizer(optimizer_name);
     if (optimizer) {
       VLOG(2) << "Registered default graph optimizer: " << optimizer_name;
@@ -348,6 +366,11 @@ Status MetaOptimizer::InitializeCustomGraphOptimizers(
     const std::set<string>& pre_initialized_optimizers,
     std::vector<std::unique_ptr<GraphOptimizer>>* optimizers) const {
   for (const auto& optimizer_config : cfg_.custom_optimizers()) {
+    if (optimizer_config.name() == "TensorRTOptimizer" &&
+        cfg_.disable_trt() == RewriterConfig::ON) {
+      continue;
+    }
+
     if (pre_initialized_optimizers.find(optimizer_config.name()) !=
         pre_initialized_optimizers.end()) {
       continue;
@@ -888,6 +911,7 @@ bool MetaOptimizerEnabled(const ConfigProto& cfg) {
          rewrite_cfg.scoped_allocator_optimization() == RewriterConfig::ON ||
          rewrite_cfg.pin_to_host_optimization() == RewriterConfig::ON ||
          rewrite_cfg.use_multi_stream() == RewriterConfig::ON ||
+         rewrite_cfg.disable_trt() != RewriterConfig::ON ||
          AutoMixedPrecisionEnabled(rewrite_cfg.auto_mixed_precision()) ||
          AutoMixedPrecisionEnabled(rewrite_cfg.auto_mixed_precision_mkl()) ||
          !rewrite_cfg.optimizers().empty() ||

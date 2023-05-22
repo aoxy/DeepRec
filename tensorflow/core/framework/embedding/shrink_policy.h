@@ -23,41 +23,55 @@ namespace tensorflow {
 template<typename V>
 class ValuePtr;
 
+class Allocator;
+
 namespace embedding {
+struct ShrinkArgs {
+  ShrinkArgs(): global_step(0), value_len(0) {}
+
+  ShrinkArgs(int64 global_step,
+             int64 value_len)
+      : global_step(global_step),
+        value_len(value_len) {}
+  int64 global_step;
+  int64 value_len;
+};
+
 template<typename K, typename V>
 class ShrinkPolicy {
  public:
-  ShrinkPolicy(KVInterface<K, V>* kv, Allocator* alloc)
-      : kv_(kv), alloc_(alloc) {}
+  ShrinkPolicy(Allocator* alloc): alloc_(alloc) {}
+  virtual ~ShrinkPolicy() {}
 
   TF_DISALLOW_COPY_AND_ASSIGN(ShrinkPolicy);
 
-  inline Status GetSnapshot() {
-    return kv_->GetSnapshot(&key_list_, &value_list_);
+  virtual void Shrink(const ShrinkArgs& shrink_args) = 0;
+
+ protected:
+  void EmplacePointer(ValuePtr<V>* value_ptr) {
+    to_delete_.emplace_back(value_ptr);
   }
-  
-  void ReleaseDeleteValues() {
+
+  void ReleaseValuePtrs() {
     for (auto it : to_delete_) {
-      (it.value_ptr)->Destroy(alloc_);
-      delete it.value_ptr;
-      kv_->Remove(it.key);
+      it->Destroy(alloc_);
+      delete it;
     }
+    to_delete_.clear();
   }
-
-  struct KeyValuePair {
-    KeyValuePair(const K& k, ValuePtr<V>* v) : key(k), value_ptr(v) {}
-
-    K key;
-    ValuePtr<V>* value_ptr;
-  };
-
- protected: 
-  std::vector<K> key_list_;
-  std::vector<ValuePtr<V>*> value_list_;
-  std::vector<KeyValuePair> to_delete_;
-
-  KVInterface<K, V>* kv_;
+ protected:
+  std::vector<ValuePtr<V>*> to_delete_;
+ private:
   Allocator* alloc_;
+};
+
+template<typename K, typename V>
+class NonShrinkPolicy: public ShrinkPolicy<K, V> {
+ public:
+  NonShrinkPolicy(): ShrinkPolicy<K, V>(nullptr) {}
+  TF_DISALLOW_COPY_AND_ASSIGN(NonShrinkPolicy);
+
+  void Shrink(const ShrinkArgs& shrink_args) {}
 };
 } // embedding
 } // tensorflow

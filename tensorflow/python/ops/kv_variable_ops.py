@@ -293,6 +293,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._default_value_dim = evconfig.default_value_dim
     self._default_value_no_permission = evconfig.default_value_no_permission
     self._storage_cache_strategy = evconfig.storage_cache_strategy
+    self._layout = evconfig.layout
 
     if self._primary is None:
       self._is_primary = True
@@ -313,7 +314,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
               list=attr_value_pb2.AttrValue.ListValue(
                   s=[compat.as_bytes("loc:@%s" % handle_name)]))
           with ops.get_default_graph()._attr_scope({"_class": attr}):
-            with ops.name_scope("Initializer"):
+            with ops.name_scope("Initializer"), ops.device(None):
               initial_value = ops.convert_to_tensor(
                   initial_value(), name="initial_value", dtype=dtype)
             rank = initial_value.get_shape().rank - 1
@@ -396,7 +397,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                     false_positive_probability = self._false_positive_probability,
                     counter_type = self._counter_type,
                     max_freq = 99999,
-                    layout = "",
+                    layout = self._layout,
                     storage_type = self._storage_type,
                     storage_path = self._storage_path,
                     storage_size = self._storage_size,
@@ -507,7 +508,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
             ops.prepend_name_scope(
                 primary_name, import_scope=import_scope))
     else:
-      if self._slot_index is 0:
+      if self._slot_index == 0:
         self._primary_handle = self._handle
       else:
         for val in primary_name_list[:-1]:
@@ -546,7 +547,7 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
     self._storage_cache_strategy = config_pb2.CacheStrategy.LFU
     if cache_op:
       self._storage_cache_strategy = cache_op.get_attr("cache_strategy")
-    if self._slot_index is 0 and self._emb_index is 0:
+    if self._slot_index == 0 and self._emb_index == 0:
       self._is_primary = True
     else:
       self._is_primary = False
@@ -976,15 +977,11 @@ def lookup_tier(var, ids):
           pindices, partitioned_result)
     return ret
 
-def identity(var):
-  if "GPU" in var.device:
-    with ops.device(var.device):
-      keys, values, versions, freqs =  gen_kv_variable_ops.kv_resource_export(var._handle, Tkeys=var._invalid_key_type, Tvalues=var.dtype)
-    part_keys, part_values, part_version, part_freqs, part_offset = \
-          gen_kv_variable_ops.kv_resource_generate_partitioned_tensor(keys, values, versions, freqs)
-    return [part_keys, part_values, part_version, part_freqs, part_offset]
-  else:
-    return var.handle
+def lookup_resource(var):
+  return gen_kv_variable_ops.kv_resource_lookup_resource(
+      var.handle,
+      Tkeys=var._invalid_key_type,
+      dtype=var._dtype)
 
 
 # Register a conversion function which reads the value of the variable,

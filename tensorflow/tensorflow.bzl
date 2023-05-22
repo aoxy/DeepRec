@@ -45,6 +45,7 @@ load(
     "//third_party/mkl_dnn:build_defs.bzl",
     "if_mkl_open_source_only",
     "if_mkldnn_threadpool",
+    "if_mkldnn_aarch64_acl",
 )
 load(
     "//third_party/ngraph:build_defs.bzl",
@@ -245,6 +246,12 @@ def if_nccl(if_true, if_false = []):
         "//conditions:default": if_true,
     })
 
+def if_api_compatible_defines(if_true, if_false = []):
+    return select({
+        "//tensorflow:with_api_compatible": if_true,
+        "//conditions:default": if_false,
+    })
+
 def get_win_copts(is_external = False):
     WINDOWS_COPTS = [
         "/DPLATFORM_WINDOWS",
@@ -298,7 +305,9 @@ def tf_copts(
         if_mkl_open_source_only(["-DINTEL_MKL_DNN_ONLY"]) +
         if_mkldnn_threadpool(["-DENABLE_DNNL_THREADPOOL"]) +
         if_enable_mkl(["-DENABLE_MKL"]) +
+        if_mkldnn_aarch64_acl(["-DENABLE_MKL", "-DENABLE_ONEDNN_OPENMP", "-DDNNL_AARCH64_USE_ACL=1"]) +
         if_ngraph(["-DINTEL_NGRAPH=1"]) +
+        if_api_compatible_defines(["-DTF_API_COMPATIBLE_1150"]) +
         if_android_arm(["-mfpu=neon"]) +
         if_linux_x86_64(["-msse3"]) +
         if_ios_x86_64(["-msse4.1"]) +
@@ -2351,6 +2360,7 @@ def tf_generate_proto_text_sources(name, srcs_relative_dir, srcs, protodeps = []
         hdrs = out_hdrs,
         visibility = visibility,
         deps = deps,
+        alwayslink = 1,
     )
 
 def tf_genrule_cmd_append_to_srcs(to_append):

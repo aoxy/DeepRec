@@ -76,10 +76,6 @@ class BaseGPUDevice : public LocalDevice {
   // completes.
   bool RequiresRecordingAccessedTensors() const override;
 
-  void ConsumeListOfAccessedTensors(
-      DeviceContext* device_context,
-      const TensorReferenceVector& tensor_refs) override;
-
   void Compute(OpKernel* op_kernel, OpKernelContext* context) override;
 
   Status Sync() override;
@@ -110,6 +106,11 @@ class BaseGPUDevice : public LocalDevice {
     return platform_gpu_id.value();
   }
 
+  // Returns the tf gpu id of this device.
+  int tf_gpu_id() const {
+    return tf_gpu_id_.value();
+  }
+
   // The executor that provides control for the device; e.g., for CUDA this
   // corresponds to the cuda context.
   se::StreamExecutor* executor() const { return executor_; }
@@ -131,6 +132,13 @@ class BaseGPUDevice : public LocalDevice {
   // Returns the number of kernels that have been queued for execution on
   // the compute stream and are not yet known to have completed.
   int PendingKernels();
+
+  int priority() const { return streams_[0]->priority; }
+  int priority(int i) const { return streams_[i]->priority; }
+
+  // Helper method for unit tests to reset the streams.
+  // Never use in production.
+  static void TestOnlyReset();
 
   void* GetStream() {
     CHECK(streams_.size() == 1);
@@ -162,6 +170,7 @@ class BaseGPUDevice : public LocalDevice {
     se::Stream* host_to_device = nullptr;
     se::Stream* device_to_host = nullptr;
     gtl::InlinedVector<se::Stream*, 4> device_to_device;
+    int priority = 0;
   };
   class StreamGroupFactory;
 
@@ -182,6 +191,7 @@ class BaseGPUDevice : public LocalDevice {
   int32 pending_cap_ = 0;
   bool timestamped_allocator_ = false;
   bool is_single_stream_mode_ = false;
+  void* cuda_graph_cublas_workspace_ = nullptr;
 
   // Initialize scractch buffers used by Eigen.
   Status InitScratchBuffers();

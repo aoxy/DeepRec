@@ -1,4 +1,4 @@
-#include "serving/processor/serving/custom_thread_pool.h"
+#include "tensorflow/core/common_runtime/custom_thread_pool.h"
 #include "serving/processor/serving/util.h"
 #include "serving/processor/framework/graph_optimizer.h"
 
@@ -62,8 +62,7 @@ Status RunOnce(
     const std::vector<string>& output_tensor_names,
     const std::vector<string>& target_node_names,
     std::vector<Tensor>* outputs, RunMetadata* run_metadata,
-    Session* session,
-    thread::ThreadPoolOptions thread_opt = thread::ThreadPoolOptions()) {
+    Session* session) {
   CallableOptions callable_options;
   std::vector<Tensor> feed_tensors;
   *callable_options.mutable_run_options() = run_options;
@@ -82,11 +81,63 @@ Status RunOnce(
 
   Session::CallableHandle callable_handle;
   TF_RETURN_IF_ERROR(session->MakeCallable(callable_options, &callable_handle));
+
   const Status run_status = session->RunCallable(callable_handle, feed_tensors,
-                                                 outputs, run_metadata, thread_opt);
+                                                 outputs, run_metadata);
   // Be sure to call ReleaseCallable() regardless of the outcome of
   // RunCallable().
   session->ReleaseCallable(callable_handle).IgnoreError();
+
+  return run_status;
+}
+
+Status RunOnce(
+    const RunOptions& run_options,
+    const std::vector<std::pair<string, Tensor>>& inputs,
+    const std::vector<string>& output_tensor_names,
+    const std::vector<string>& target_node_names,
+    std::vector<Tensor>* outputs, RunMetadata* run_metadata,
+    Session* session,
+    thread::ThreadPoolOptions thread_opt,
+    Session::CallableHandle** handler) {
+  CallableOptions callable_options;
+  std::vector<Tensor> feed_tensors;
+  *callable_options.mutable_run_options() = run_options;
+  for (const auto& input : inputs) {
+    const string& name = input.first;
+    const Tensor& tensor = input.second;
+    callable_options.add_feed(name);
+    feed_tensors.push_back(tensor);
+  }
+  for (const string& output_tensor_name : output_tensor_names) {
+    callable_options.add_fetch(output_tensor_name);
+  }
+  for (const string& target_node_name : target_node_names) {
+    callable_options.add_target(target_node_name);
+  }
+
+  Session::CallableHandle callable_handle;
+  if (!handler || !(*handler)) {
+    TF_RETURN_IF_ERROR(session->MakeCallable(callable_options, &callable_handle));
+  } else {
+    callable_handle = **handler;
+  }
+
+  const Status run_status = session->RunCallable(callable_handle, feed_tensors,
+                                                 outputs, run_metadata, thread_opt);
+  /* DO NOT delete here.
+  // Be sure to call ReleaseCallable() regardless of the outcome of
+  // RunCallable().
+  //session->ReleaseCallable(callable_handle).IgnoreError();
+  */
+  if (!handler) {
+    LOG(ERROR) << "Handler can not be nullptr. Please check the code.";
+    session->ReleaseCallable(callable_handle).IgnoreError();
+  } else if (!(*handler)) {
+    *handler = new Session::CallableHandle();
+    **handler = callable_handle;
+  }
+
   return run_status;
 }
 
@@ -96,8 +147,7 @@ bool HasMainOp(const MetaGraphDef& meta_graph_def) {
     collection_def_map.end();
 }
 
-Status RunRestoreCheckpoint(
-    bool restore_incr_checkpoint,
+Status RunIncrRestoreCheckpoint(
     const RunOptions& run_options,
     const std::string& full_ckpt_name,
     const std::string& incr_ckpt_name,
@@ -106,7 +156,8 @@ Status RunRestoreCheckpoint(
     const StringPiece variable_filename_const_op_name,
     const StringPiece incr_variable_filename_const_op_name,
     const std::vector<AssetFileDef>& asset_file_defs,
-    Session* session, thread::ThreadPoolOptions thread_opt) {
+    Session* session, thread::ThreadPoolOptions thread_opt,
+    Session::CallableHandle** handler) {
   LOG(INFO) << "Restoring checkpoint.";
   // Find path to variables to be restored in export directory.
   // Add variables to the graph.
@@ -116,19 +167,43 @@ Status RunRestoreCheckpoint(
   std::vector<std::pair<string, Tensor>> inputs = {
       {string(variable_filename_const_op_name), variables_path_tensor}};
 
-  if (restore_incr_checkpoint) {
-    Tensor incr_variables_path_tensor(DT_STRING, TensorShape({}));
-    incr_variables_path_tensor.scalar<string>()() = incr_ckpt_name;
-    inputs.push_back(
-        {string(incr_variable_filename_const_op_name), incr_variables_path_tensor});
-  }
+  Tensor incr_variables_path_tensor(DT_STRING, TensorShape({}));
+  incr_variables_path_tensor.scalar<string>()() = incr_ckpt_name;
+  inputs.push_back(
+      {string(incr_variable_filename_const_op_name), incr_variables_path_tensor});
 
   util::AddAssetsTensorsToInputs(savedmodel_dir, asset_file_defs, &inputs);
 
   RunMetadata run_metadata;
   return util::RunOnce(run_options, inputs, {}, {string(restore_op_name)},
-                       nullptr /* outputs */, &run_metadata, session, thread_opt);
+                       nullptr /* outputs */, &run_metadata, session, thread_opt, handler);
 }
+
+Status RunRestoreCheckpoint(
+    const RunOptions& run_options,
+    const std::string& full_ckpt_name,
+    const std::string& savedmodel_dir,
+    const StringPiece restore_op_name,
+    const StringPiece variable_filename_const_op_name,
+    const StringPiece incr_variable_filename_const_op_name,
+    const std::vector<AssetFileDef>& asset_file_defs,
+    Session* session) {
+  LOG(INFO) << "Restoring checkpoint.";
+  // Find path to variables to be restored in export directory.
+  // Add variables to the graph.
+  Tensor variables_path_tensor(DT_STRING, TensorShape({}));
+  variables_path_tensor.scalar<string>()() = full_ckpt_name;
+
+  std::vector<std::pair<string, Tensor>> inputs = {
+      {string(variable_filename_const_op_name), variables_path_tensor}};
+
+  util::AddAssetsTensorsToInputs(savedmodel_dir, asset_file_defs, &inputs);
+
+  RunMetadata run_metadata;
+  return util::RunOnce(run_options, inputs, {}, {string(restore_op_name)},
+                       nullptr /* outputs */, &run_metadata, session);
+}
+
 
 Status RunRestore(const RunOptions& run_options, const string& export_dir,
                   const StringPiece restore_op_name,
@@ -165,6 +240,31 @@ Status RunRestore(const RunOptions& run_options, const string& export_dir,
   RunMetadata run_metadata;
   return util::RunOnce(run_options, inputs, {}, {string(restore_op_name)},
                        nullptr /* outputs */, &run_metadata, session);
+}
+
+Status RunIncrMainOp(const RunOptions& run_options, const string& export_dir,
+                     const MetaGraphDef& meta_graph_def,
+                     const std::vector<AssetFileDef>& asset_file_defs,
+                     Session* session, const string& main_op_key,
+                     thread::ThreadPoolOptions thread_opt,
+                     Session::CallableHandle** handler) {
+  LOG(INFO) << "Running MainOp with key " << main_op_key
+            << " on SavedModel bundle.";
+  const auto& collection_def_map = meta_graph_def.collection_def();
+  const auto main_op_it = collection_def_map.find(main_op_key);
+  if (main_op_it != collection_def_map.end()) {
+    if (main_op_it->second.node_list().value_size() != 1) {
+      return errors::FailedPrecondition(
+          strings::StrCat("Expected exactly one main op in : ", export_dir));
+    }
+    std::vector<std::pair<string, Tensor>> inputs;
+    util::AddAssetsTensorsToInputs(export_dir, asset_file_defs, &inputs);
+    RunMetadata run_metadata;
+    const StringPiece main_op_name = main_op_it->second.node_list().value(0);
+    return util::RunOnce(run_options, inputs, {}, {string(main_op_name)},
+                         nullptr /* outputs */, &run_metadata, session, thread_opt, handler);
+  }
+  return Status::OK();
 }
 
 Status RunMainOp(const RunOptions& run_options, const string& export_dir,
@@ -375,7 +475,8 @@ Status ValidateSavedTensors(const GraphDef& graph_def) {
   return Status::OK();
 }
 
-Tensor Proto2Tensor(const eas::ArrayProto& input) {
+TensorWithStatus Proto2Tensor(const std::string& key,
+                              const eas::ArrayProto& input) {
   TensorShape tensor_shape;
   int64 total_size = 1;
   for (int i = 0; i < input.array_shape().dim_size(); ++i) {
@@ -383,246 +484,309 @@ Tensor Proto2Tensor(const eas::ArrayProto& input) {
     total_size *= input.array_shape().dim(i);
   }
 
+  TensorWithStatus ret;
+  ret.status = Status::OK();
   switch (input.dtype()) {
     case tensorflow::eas::DT_FLOAT: {
       if (total_size != input.float_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.float_val_size()));
+        break;
       }
       Tensor tensor(DT_FLOAT, tensor_shape);
       auto flat = tensor.flat<float>();
       memcpy(flat.data(), input.float_val().data(),
           input.float_val_size() * sizeof(float));
 
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_DOUBLE: {
       if (total_size != input.double_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.double_val_size()));
+        break;
       }
       Tensor tensor(DT_DOUBLE, tensor_shape);
       auto flat = tensor.flat<double>();
       memcpy(flat.data(), input.double_val().data(),
           input.double_val_size() * sizeof(double));
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_INT32: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(DT_INT32, tensor_shape);
       auto flat = tensor.flat<int>();
       memcpy(flat.data(), input.int_val().data(),
           input.int_val_size() * sizeof(int));
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_UINT8: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(tensorflow::DT_UINT8, tensor_shape);
       auto flat = tensor.flat<uint8>();
       for (int i = 0; i < input.int_val_size(); i++) {
         flat(i) = (uint8)input.int_val(i);
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_INT16: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(tensorflow::DT_INT16, tensor_shape);
       auto flat = tensor.flat<int16>();
       for (int i = 0; i < input.int_val_size(); i++) {
         flat(i) = (int16)input.int_val(i);
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_UINT16: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(tensorflow::DT_UINT16, tensor_shape);
       auto flat = tensor.flat<uint16>();
       for (int i = 0; i < input.int_val_size(); i++) {
         flat(i) = (uint16)input.int_val(i);
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_INT8: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(tensorflow::DT_INT8, tensor_shape);
       auto flat = tensor.flat<int8>();
       for (int i = 0; i < input.int_val_size(); i++) {
         flat(i) = (int8)input.int_val(i);
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_STRING: {
       if (total_size != input.string_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.string_val_size()));
+        break;
       }
       Tensor tensor(tensorflow::DT_STRING, tensor_shape);
       auto flat = tensor.flat<std::string>();
       for (int i = 0; i < input.string_val_size(); i++) {
         flat(i) = input.string_val(i);
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_COMPLEX64: {
       if (total_size != input.float_val_size() / 2) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.float_val_size()));
+        break;
       }
       Tensor tensor(tensorflow::DT_COMPLEX64, tensor_shape);
       auto flat = tensor.flat<complex64>();
       for (int i = 0; i < input.float_val_size(); i += 2) {
         flat(i) = complex64(input.float_val(i), input.float_val(i + 1));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_COMPLEX128: {
       if (total_size != input.double_val_size() / 2) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.double_val_size()));
+        break;
       }
       Tensor tensor(tensorflow::DT_COMPLEX128, tensor_shape);
       auto flat = tensor.flat<complex128>();
       for (int i = 0; i < input.double_val_size(); i += 2) {
         flat(i) = complex64(input.double_val(i), input.double_val(i + 1));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_INT64: {
       if (total_size != input.int64_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int64_val_size()));
+        break;
       }
       Tensor tensor(DT_INT64, tensor_shape);
       auto flat = tensor.flat<int64>();
       memcpy(flat.data(), input.int64_val().data(),
           input.int64_val_size() * sizeof(int64));
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_BOOL: {
       if (total_size != input.bool_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.bool_val_size()));
+        break;
       }
       Tensor tensor(DT_BOOL, tensor_shape);
       auto flat = tensor.flat<bool>();
       for (int i = 0; i < input.bool_val_size(); ++i) {
         flat(i) = input.bool_val(i);
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_QINT8: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(DT_QINT8, tensor_shape);
       auto flat = tensor.flat<qint8>();
       for (int i = 0; i < input.int_val_size(); ++i) {
         flat(i) = qint8(input.int_val(i));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_QUINT8: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(DT_QUINT8, tensor_shape);
       auto flat = tensor.flat<quint8>();
       for (int i = 0; i < input.int_val_size(); ++i) {
         flat(i) = quint8(input.int_val(i));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_QINT32: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(DT_QINT32, tensor_shape);
       auto flat = tensor.flat<qint32>();
       for (int i = 0; i < input.int_val_size(); ++i) {
         flat(i) = qint32(input.int_val(i));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_QINT16: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(DT_QINT16, tensor_shape);
       auto flat = tensor.flat<qint16>();
       for (int i = 0; i < input.int_val_size(); ++i) {
         flat(i) = qint16(input.int_val(i));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_QUINT16: {
       if (total_size != input.int_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.int_val_size()));
+        break;
       }
       Tensor tensor(DT_QUINT16, tensor_shape);
       auto flat = tensor.flat<quint16>();
       for (int i = 0; i < input.int_val_size(); ++i) {
         flat(i) = quint16(input.int_val(i));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_BFLOAT16: {
       if (total_size != input.float_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.float_val_size()));
+        break;
       }
       Tensor tensor(DT_BFLOAT16, tensor_shape);
       auto flat = tensor.flat<bfloat16>();
       tensorflow::FloatToBFloat16(input.float_val().data(),
                                   flat.data(),
                                   input.float_val_size());
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_HALF: {
       if (total_size != input.float_val_size()) {
-        // TODO: should skip current request
-        LOG(FATAL) << "Invalid input.";
+        ret.status = errors::InvalidArgument(
+            "Invalid input: ", key, " . shape size VS input size = ",
+            std::to_string(total_size), " VS ", std::to_string(input.float_val_size()));
+        break;
       }
       Tensor tensor(DT_HALF, tensor_shape);
       auto flat = tensor.flat<Eigen::half>();
       for (int i = 0; i < input.float_val_size(); ++i) {
         flat(i) = Eigen::half(input.float_val(i));
       }
-      return tensor;
+      ret.tensor = std::move(tensor);
+      break;
     }
     case tensorflow::eas::DT_RESOURCE: {
-      LOG(FATAL) << "Input Tensor Not Support this DataType: DT_RESOURCE";
+      ret.status = errors::InvalidArgument(
+          "Input Tensor: ", key, ", Not Support this DataType: DT_RESOURCE");
       break;
     }
     case tensorflow::eas::DT_VARIANT: {
-      LOG(FATAL) << "Input Tensor Not Support this DataType: DT_VARIANT";
+      ret.status = errors::InvalidArgument(
+          "Input Tensor: ", key, ", Not Support this DataType: DT_VARIANT");
       break;
     }
     default: {
-      LOG(FATAL) << "Input Tensor Not Support this DataType";
+      ret.status = errors::InvalidArgument(
+          "Input Tensor: ", key, ", Not Support this DataType");
       break;
     }
   }
-  return Tensor();
+
+  return ret;
 }
 
 eas::PredictResponse Tensor2Response(

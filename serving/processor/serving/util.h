@@ -12,12 +12,17 @@
 #include "tensorflow/cc/saved_model/constants.h"
 #include "tensorflow/core/platform/protobuf_internal.h"
 #include "tensorflow/core/lib/io/path.h"
+#include "tensorflow/core/lib/core/threadpool_options.h"
 #include "tensorflow/core/util/tensor_bundle/naming.h"
-
 
 namespace tensorflow {
 namespace processor {
 namespace util {
+
+struct TensorWithStatus {
+  Status status;
+  Tensor tensor;
+};
 
 Status GetAssetFileDefs(const MetaGraphDef& meta_graph_def,
                         std::vector<AssetFileDef>* asset_file_defs);
@@ -25,15 +30,24 @@ Status GetAssetFileDefs(const MetaGraphDef& meta_graph_def,
 void AddAssetsTensorsToInputs(const StringPiece export_dir,
                               const std::vector<AssetFileDef>& asset_file_defs,
                               std::vector<std::pair<string, Tensor>>* inputs);
- 
+Status RunOnce(
+    const RunOptions& run_options,
+    const std::vector<std::pair<string, Tensor>>& inputs,
+    const std::vector<string>& output_tensor_names,
+    const std::vector<string>& target_node_names,
+    std::vector<Tensor>* outputs, RunMetadata* run_metadata,
+    Session* session);
+
 Status RunOnce(const RunOptions& run_options,
                const std::vector<std::pair<string, Tensor>>& inputs,
                const std::vector<string>& output_tensor_names,
                const std::vector<string>& target_node_names,
                std::vector<Tensor>* outputs, RunMetadata* run_metadata,
-               Session* session, thread::ThreadPoolOptions thread_opt);
-Status RunRestoreCheckpoint(
-    bool restore_incr_checkpoint,
+               Session* session,
+               thread::ThreadPoolOptions thread_opt,
+               Session::CallableHandle** handler);
+
+Status RunIncrRestoreCheckpoint(
     const RunOptions& run_options,
     const std::string& full_ckpt_name,
     const std::string& incr_ckpt_name,
@@ -42,7 +56,18 @@ Status RunRestoreCheckpoint(
     const StringPiece variable_filename_const_op_name,
     const StringPiece incr_variable_filename_const_op_name,
     const std::vector<AssetFileDef>& asset_file_defs,
-    Session* session, thread::ThreadPoolOptions thread_opt);
+    Session* session, thread::ThreadPoolOptions thread_opt,
+    Session::CallableHandle** handler);
+
+Status RunRestoreCheckpoint(
+    const RunOptions& run_options,
+    const std::string& full_ckpt_name,
+    const std::string& savedmodel_dir,
+    const StringPiece restore_op_name,
+    const StringPiece variable_filename_const_op_name,
+    const StringPiece incr_variable_filename_const_op_name,
+    const std::vector<AssetFileDef>& asset_file_defs,
+    Session* session);
 
 Status RunRestore(const RunOptions& run_options, const string& export_dir,
                   const StringPiece restore_op_name,
@@ -51,6 +76,13 @@ Status RunRestore(const RunOptions& run_options, const string& export_dir,
                   Session* session);
  
 bool HasMainOp(const MetaGraphDef& meta_graph_def);
+
+Status RunIncrMainOp(const RunOptions& run_options, const string& export_dir,
+                     const MetaGraphDef& meta_graph_def,
+                     const std::vector<AssetFileDef>& asset_file_defs,
+                     Session* session, const string& main_op_key,
+                     thread::ThreadPoolOptions thread_opt,
+                     Session::CallableHandle** handler);
 
 Status RunMainOp(const RunOptions& run_options, const string& export_dir,
                  const MetaGraphDef& meta_graph_def,
@@ -83,7 +115,8 @@ Status GetInitOp(const string& export_dir,
 
 Status ValidateSavedTensors(const GraphDef& graph_def);
 
-Tensor Proto2Tensor(const eas::ArrayProto& input);
+TensorWithStatus Proto2Tensor(const std::string& key,
+                              const eas::ArrayProto& input);
 
 eas::PredictResponse Tensor2Response(
     const processor::Request& req,

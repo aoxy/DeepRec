@@ -104,16 +104,6 @@ class Device : public DeviceBase {
     op_kernel->ComputeAsync(context, std::move(done));
   }
 
-  // Takes ownership of the references in tensors. If necessary, a
-  // device may override this method to keep a reference to the
-  // accessed tensors until the async computation has completed.
-  virtual void ConsumeListOfAccessedTensors(
-      DeviceContext* context, const TensorReferenceVector& tensors) {
-    for (const auto& ref : tensors) {
-      ref.Unref();
-    }
-  }
-
   // Blocks until all operations queued on the device at the time of
   // the call have completed.  Returns any error pending on the device
   // at completion.
@@ -198,9 +188,13 @@ class Device : public DeviceBase {
       DeviceType device, Bytes memory_limit,
       const DeviceLocality& locality,
       const string& physical_device_desc);
- 
+
   // Clears the resource manager associated with this device.
-  void ClearResourceMgr() { rmgr_->Clear(); }
+  void ClearResourceMgr() {
+    if (owned_rmgr_) {
+      rmgr_->Clear();
+    }
+  }
 
   virtual bool IsLocal() const { return true; }
 

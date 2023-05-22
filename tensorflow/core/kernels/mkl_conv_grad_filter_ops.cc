@@ -40,6 +40,9 @@ limitations under the License.
 #include "tensorflow/core/util/tensor_format.h"
 #include "tensorflow/core/util/use_cudnn.h"
 #include "tensorflow/core/util/work_sharder.h"
+#ifdef DNNL_AARCH64_USE_ACL
+#include "tensorflow/core/platform/mutex.h"
+#endif
 
 using dnnl::convolution_backward_weights;
 using dnnl::memory;
@@ -101,6 +104,9 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
   void Execute(const T* src_data, const T* diff_filter_data,
                const T* diff_bias_data, const T* diff_dst_data,
                std::shared_ptr<stream> bwd_filter_stream) {
+#ifdef DNNL_AARCH64_USE_ACL
+    mutex_lock lock(primitive_execution_mu_);
+#endif
     // TODO: Create a common function and avoid the duplicate code
 #ifdef ENABLE_DNNL_THREADPOOL
     context_.src_mem->set_data_handle(
@@ -283,6 +289,10 @@ class MklConvBwdFilterPrimitive : public MklPrimitive {
   }
 
   struct ConvBwdFilterContext context_;
+  
+#ifdef DNNL_AARCH64_USE_ACL
+  mutex primitive_execution_mu_;
+#endif
 };
 
 template <typename T>
@@ -458,6 +468,7 @@ class MklConvCustomBackpropFilterOp
           fwd_src_dims, fwd_filter_dims, diff_bias_dims, diff_dst_dims, strides,
           dilations, padding_left, padding_right);
 
+      MklDnnThreadPool eigen_tp(context);
       // OneDNN allocates large buffers when a conv gradient filter primitive
       // is created. So we don't cache conv backward primitives when the env
       // variable TF_MKL_OPTIMIZE_PRIMITIVE_MEMUSE is set to true.
@@ -581,7 +592,6 @@ class MklConvCustomBackpropFilterOp
 
       // Execute convolution backward filter.
       std::shared_ptr<stream> bwd_cpu_stream;
-      MklDnnThreadPool eigen_tp(context);
       bwd_cpu_stream.reset(
           CreateStream(&eigen_tp, conv_bwd_filter->GetEngine()));
       if (bias_enabled) {

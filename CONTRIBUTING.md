@@ -6,25 +6,18 @@ Before sending your pull requests, make sure you followed this list.
 
 - Read [contributing guidelines](CONTRIBUTING.md).
 - Read [Code of Conduct](CODE_OF_CONDUCT.md).
-- Ensure you have signed the [Contributor License Agreement (CLA)](https://cla-assistant.io/alibaba/DeepRec).
+- Read [DCO](https://github.com/apps/dco).
 - Check if my changes are consistent with the [guidelines](https://github.com/alibaba/DeepRec/blob/main/CONTRIBUTING.md#general-guidelines-and-philosophy-for-contribution).
 - Changes are consistent with the [Coding Style](https://github.com/alibaba/DeepRec/blob/main/CONTRIBUTING.md#c-coding-style).
 - Run [Unit Tests](https://github.com/alibaba/DeepRec/blob/main/CONTRIBUTING.md#running-unit-tests).
 
 ## How to become a contributor and submit your own code
 
-### Contributor License Agreements
+### Developer Certificate of Origin (DCO)
 
-We'd love to accept your patches! Before we can take them, we have to jump a couple of legal hurdles.
+We'd love to accept your patches! Before we can take them, please make sure all commit messages to contain the Signed-off-by line with an email address that matches the commit author.
 
-Please fill out either the individual or corporate Contributor License Agreement (CLA).
-
-  * If you are an individual writing original source code and you're sure you own the intellectual property, then you'll need to sign an [individual CLA](https://cla-assistant.io/alibaba/DeepRec).
-  * If you work for a company that wants to allow you to contribute your work, then you'll need to sign a [corporate CLA](https://cla-assistant.io/alibaba/DeepRec).
-
-Follow either of the two links above to access the appropriate CLA and instructions for how to sign and return it. Once we receive it, we'll be able to accept your pull requests.
-
-***NOTE***: Only original source code from you and other people that have signed the CLA can be accepted into the main repository.
+The Developer Certificate of Origin (DCO) is a lightweight way for contributors to certify that they wrote or otherwise have the right to submit the code they are contributing to the project. [DCO Details](https://github.com/apps/dco)
 
 ### Contributing code
 
@@ -145,61 +138,40 @@ pylint --rcfile=/tmp/pylintrc myfile.py
 * [Google Shell Style Guide](https://google.github.io/styleguide/shell.xml)
 * [Google Objective-C Style Guide](https://google.github.io/styleguide/objcguide.html)
 
-#### Running sanity check
+#### Git Commit Guidelines
 
-If you have Docker installed on your system, you can perform a sanity check on
-your changes by running the command:
+Use meaningful commit message that described what you did. Format should be: [Component] <Subject> <Description>
 
-```bash
-tensorflow/tools/ci_build/ci_build.sh CPU tensorflow/tools/ci_build/ci_sanity.sh
+Component: after using the Component mark, there needs to be a space with the following subject.
+
+Subject: a brief description of the purpose of commit, must be in English, no more than 50 characters. The first letter needs to be capitalized and the ending is `.`
+
+Description: Description is a further detailed description of the commit, such as bugfix, which is the scene caused by the bug. If it is performance optimization, it is performance data. Use the description as a supplement to the subject.
+
+Example:
+
 ```
+[Runtime] Add blacklist and whitelist to JitCugraph. (#578)
 
-This will catch most license, Python coding style and BUILD file issues that
-may exist in your changes.
+1. Refine the auto-clustering policy by adding blacklist and whitelist environment setup.
+2. Add documents of using JitCugraph.
+```
 
 #### Running unit tests
 
-There are two ways to run DeepRec unit tests.
+Using Docker and DeepRec's CI scripts.
 
-1.  Using tools and libraries installed directly on your system.
+```bash
+# Install Docker first, then this will build and run cpu tests
+cibuild/cpu-ut/cpu-core-ut.sh
+```
+Also you can directly use bazel to run the tests, like:
 
-    Refer to the
-    [CPU-only developer Dockerfile](https://github.com/alibaba/DeepRec/blob/main/tensorflow/tools/dockerfiles/dockerfiles/devel-cpu.Dockerfile)
-    and
-    [GPU developer Dockerfile](https://github.com/alibaba/DeepRec/blob/main/tensorflow/tools/dockerfiles/dockerfiles/devel-gpu.Dockerfile)
-    for the required packages. Alternatively, use the said
-    Docker images e.g.,
-    [devel](registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-developer:deeprec-dev-cpu-py36-ubuntu18.04) and [devel-gpu](registry.cn-shanghai.aliyuncs.com/pai-dlc-share/deeprec-developer:deeprec-dev-gpu-py36-cu110-ubuntu18.04) for
-    development to avoid installing the packages directly on your system (in
-    which case remember to change directory from `/root` to `/DeepRec` once
-    you get into the running container so `bazel` can find the `DeepRec`
-    workspace).
+```bash
+./configure
+bazel test //tensorflow/python/...
+```
 
-    Once you have the packages installed, you can run a specific unit test in
-    bazel by doing as follows:
-
-    If the tests are to be run on GPU, add CUDA paths to LD_LIBRARY_PATH and add
-    the `cuda` option flag
-
-    ```bash
-    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
-
-    export flags="--config=opt --config=cuda -k"
-    ```
-
-    For example, to run all tests under tensorflow/python, do:
-
-    ```bash
-    bazel test ${flags} //tensorflow/python/...
-    ```
-
-2.  Using Docker and DeepRec's CI scripts.
-
-    ```bash
-    # Install Docker first, then this will build and run cpu tests
-    tensorflow/tools/ci_build/ci_build.sh CPU bazel test //tensorflow/...
-    ```
-
-    See
-    [DeepRec Builds](https://github.com/alibaba/DeepRec/tree/main/cibuild)
-    for details.
+See
+[DeepRec Builds](https://github.com/alibaba/DeepRec/tree/main/cibuild)
+for details.

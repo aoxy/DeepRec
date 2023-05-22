@@ -198,7 +198,7 @@ class TestableModelSessionMgr : public ModelSessionMgr {
   }
 
   size_t GetModelSessionSize() {
-    if (serving_session_ != nullptr) {
+    if (serving_model_session_ != nullptr) {
       return sessions_.size() + 1;
     } else {
       return sessions_.size();
@@ -209,11 +209,12 @@ class TestableModelSessionMgr : public ModelSessionMgr {
     SessionGroup* sess_group = nullptr;
     ModelConfig config;
     CreateSessionGroup(&sess_group, &config);
-    sessions_.emplace_back(new ModelSession(sess_group, "MOD", Version(), sparse_storage));
+    sessions_.emplace_back(new ModelSession(sess_group, "MOD", Version(),
+                                            sparse_storage, "graph_signature"));
   }
 
   void* GetServingSession() {
-    return serving_session_->GetSession();
+    return serving_model_session_->GetLeaderSessions()[0];
   }
 
   Status RunRestoreOps(
@@ -235,7 +236,7 @@ TEST_F(ModelSessionMgrTest, CreateModelSessionReturnStatusOK) {
   ModelConfig config = CreateValidModelConfig();
   FakeFeatureStoreMgr feature_store(&config);
   EXPECT_TRUE(mgr.CreateModelSession(version, config.checkpoint_dir.c_str(),
-        &feature_store, false, false, &config).ok());
+        &feature_store, false, false, &config, "graph_signature").ok());
 }
 
 TEST_F(ModelSessionMgrTest, CreateModelSessionWhenPrevServingDone) {
@@ -249,7 +250,7 @@ TEST_F(ModelSessionMgrTest, CreateModelSessionWhenPrevServingDone) {
   
   Version version_0;
   EXPECT_TRUE(mgr.CreateModelSession(version_0, config.checkpoint_dir.c_str(),
-        &feature_store, false, false, &config).ok());
+        &feature_store, false, false, &config, "graph_signature").ok());
   
   EXPECT_EQ(1, mgr.GetModelSessionSize());
   auto prev_serving_session = mgr.GetServingSession();
@@ -259,7 +260,7 @@ TEST_F(ModelSessionMgrTest, CreateModelSessionWhenPrevServingDone) {
   EXPECT_TRUE(mgr.Predict(req, resp).ok());
 
   EXPECT_TRUE(mgr.CreateModelSession(version_0, config.checkpoint_dir.c_str(),
-        &feature_store, false, false, &config).ok());
+        &feature_store, false, false, &config, "graph_signature").ok());
 
   EXPECT_EQ(1, mgr.GetModelSessionSize());
 
@@ -277,7 +278,7 @@ TEST_F(ModelSessionMgrTest, CleanupModelSessionWhenNoRequest) {
   
   Version version_0;
   EXPECT_TRUE(mgr.CreateModelSession(version_0, config.checkpoint_dir.c_str(),
-        &feature_store, false, false, &config).ok());
+        &feature_store, false, false, &config, "graph_signature").ok());
   
   EXPECT_EQ(1, mgr.GetModelSessionSize());
 

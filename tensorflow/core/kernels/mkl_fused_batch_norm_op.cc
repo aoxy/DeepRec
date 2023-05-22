@@ -24,6 +24,9 @@ limitations under the License.
 #include "tensorflow/core/util/mkl_types.h"
 #include "tensorflow/core/util/mkl_util.h"
 #include "tensorflow/core/util/tensor_format.h"
+#ifdef DNNL_AARCH64_USE_ACL
+#include "tensorflow/core/platform/mutex.h"
+#endif
 
 #define GET_FLAG(bn_flag) static_cast<int>(BN_FLAGS::bn_flag)
 #define IS_SET(cflag) (context_.flags & GET_FLAG(cflag))
@@ -80,6 +83,9 @@ class MklFusedBatchNormFwdPrimitive : public MklPrimitive {
   void Execute(const T* src_data, const U* weights_data, T* dst_data,
                U* mean_data, U* variance_data,
                std::shared_ptr<stream> fwd_stream, U* workspace_data) {
+#ifdef DNNL_AARCH64_USE_ACL
+    mutex_lock lock(primitive_execution_mu_);
+#endif
     // TODO: Create a common function and avoid the duplicate code
 #ifdef ENABLE_DNNL_THREADPOOL
     context_.src_mem->set_data_handle(
@@ -326,6 +332,10 @@ class MklFusedBatchNormFwdPrimitive : public MklPrimitive {
   }
 
   struct BatchNormFwdContext context_;
+
+#ifdef DNNL_AARCH64_USE_ACL
+  mutex primitive_execution_mu_;
+#endif
 };
 
 template <typename T, typename U>
@@ -429,6 +439,9 @@ class MklFusedBatchNormBwdPrimitive : public MklPrimitive {
                const T* diff_dst_data, const U* weights_data, T* diff_src_data,
                U* diff_weights_data, U* res_space_data,
                std::shared_ptr<stream> bwd_stream) {
+#ifdef DNNL_AARCH64_USE_ACL
+    mutex_lock lock(primitive_execution_mu_);
+#endif
     // TODO: Create a common function and avoid the duplicate code
 #ifdef ENABLE_DNNL_THREADPOOL
     context_.src_mem->set_data_handle(
@@ -591,6 +604,10 @@ class MklFusedBatchNormBwdPrimitive : public MklPrimitive {
   }
 
   struct BatchNormBwdContext context_;
+  
+#ifdef DNNL_AARCH64_USE_ACL
+  mutex primitive_execution_mu_;
+#endif
 };
 
 template <typename T, typename U>
@@ -788,6 +805,8 @@ class MklFusedBatchNormOp : public OpKernel {
 
       MklBatchNormFwdParams fwdParams(src_dims, depth_, epsilon_, is_training_,
                                       src_md, activation_mode_);
+
+      MklDnnThreadPool eigen_tp(context);
       // Get forward batch-normalization op from the primitive caching pool.
       MklFusedBatchNormFwdPrimitive<T, U>* bn_fwd =
           MklFusedBatchNormFwdPrimitiveFactory<T, U>::Get(fwdParams);
@@ -878,7 +897,6 @@ class MklFusedBatchNormOp : public OpKernel {
 
       // Execute
       std::shared_ptr<stream> fwd_cpu_stream;
-      MklDnnThreadPool eigen_tp(context);
       fwd_cpu_stream.reset(CreateStream(&eigen_tp, bn_fwd->GetEngine()));
       bn_fwd->Execute(src_data, weights_op_data, dst_data, mean_op_data,
                       variance_op_data, fwd_cpu_stream, ws_data);
@@ -1202,6 +1220,7 @@ class MklFusedBatchNormGradOp : public OpKernel {
 
       MklBatchNormBwdParams bwdParams(src_dims, diff_dst_dims, depth_, epsilon_,
                                       is_training_, src_md, diff_dst_md);
+      MklDnnThreadPool eigen_tp(context);
       MklFusedBatchNormBwdPrimitive<T, U>* bn_bwd =
           MklFusedBatchNormBwdPrimitiveFactory<T, U>::Get(bwdParams);
 
@@ -1262,7 +1281,6 @@ class MklFusedBatchNormGradOp : public OpKernel {
 
       // Execute
       std::shared_ptr<stream> bwd_cpu_stream;
-      MklDnnThreadPool eigen_tp(context);
       bwd_cpu_stream.reset(CreateStream(&eigen_tp, bn_bwd->GetEngine()));
       bn_bwd->Execute(src_data, mean_data, variance_data, diff_dst_data,
                       weights_data, diff_src_data, diff_weights_data,

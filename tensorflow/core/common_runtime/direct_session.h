@@ -1,5 +1,4 @@
 /* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -239,6 +238,12 @@ class DirectSession : public Session {
       gtl::ArraySlice<string> target_nodes,
       ExecutorsAndKeys** executors_and_keys, RunStateArgs* run_state_args);
 
+  ::tensorflow::Status GetOrCreateExecutors(
+      gtl::ArraySlice<string> inputs, gtl::ArraySlice<string> outputs,
+      gtl::ArraySlice<string> target_nodes,
+      ExecutorsAndKeys** executors_and_keys, RunStateArgs* run_state_args,
+      const std::string& graph_signature);
+
   // Creates a set of executors to run the subgraph defined by
   // `callable_options`.
   ::tensorflow::Status CreateExecutors(
@@ -346,6 +351,13 @@ class DirectSession : public Session {
   // is owned.
   std::vector<std::pair<thread::ThreadPool*, bool>> thread_pools_;
 
+  // The stage subgraph thread pools
+  // first item of pair is inter op thread pools
+  // second item of pair is intra op thread pools
+  std::vector<
+      std::pair<thread::ThreadPoolInterface*, thread::ThreadPoolInterface*>>
+      stage_subgraph_thread_pools_;
+
   Status init_error_;  // Set to an error if construction failed.
 
   // If true, blocks until device has finished all queued operations in a step.
@@ -440,6 +452,10 @@ class DirectSession : public Session {
   bool use_multi_stream_ = false;
   int multi_stream_num_ = 0;
   ResourceMgr* multi_stream_shared_rmgr_ = nullptr;
+
+  // User decide whether use compute stream as copy stream
+  // by set environment 'MERGE_COMPUTE_COPY_STREAM'
+  bool merge_compute_and_copy_stream_ = false;
 
   TF_DISALLOW_COPY_AND_ASSIGN(DirectSession);
 

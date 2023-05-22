@@ -2,7 +2,6 @@
 The following is a brief directory structure and description for this example:
 ```
 ├── data                          # Data set directory
-│   └── README.md                   # Documentation describing how to prepare dataset
 ├── distribute_k8s                # Distributed training related files
 │   ├── distribute_k8s_BF16.yaml    # k8s yaml to crate a training job with BF16 feature
 │   ├── distribute_k8s_FP32.yaml    # k8s yaml to crate a training job
@@ -106,9 +105,12 @@ input:
       - `--ev_elimination`: Set Feature Elimination of EmbeddingVariable Feature. Options: [None, 'l2', 'gstep'], default is `None`.
       - `--ev_filter`: Set Feature Filter of EmbeddingVariable Feature. Options: [None, 'counter', 'cbf'], default to `None`.
       - `--dynamic_ev`: Whether to enable Dynamic-dimension Embedding Variable. Default is `False`. (Not really enabled)
+      - `--group_embedding`: Use GroupEmbedding features.
       - `--multihash`: Whether to enable Multi-Hash Variable. Default is `False`. (Not really enabled)
       - `--incremental_ckpt`: Set time of save Incremental Checkpoint. Default is `0`.
       - `--workqueue`: Whether to enable WorkQueue. Default is `False`.
+      - `--parquet_dataset`: Whether to enable ParquetDataset. Default is `True`.
+      - `--parquet_dataset_shuffle`: Whether to enable shuffle operation for Parquet Dataset. Default to `False`.
     - Basic Settings:
       - `--data_location`: Full path of train & eval data. Default is `./data`.
       - `--steps`: Set the number of steps on train dataset. When default(`0`) is used, the number of steps is computed based on dataset size and number of epochs equals 1000.
@@ -244,10 +246,15 @@ The benchmark is performed on the [Alibaba Cloud ACK Service(Alibaba Cloud Conta
 - Community TensorFlow version is v1.15.5.
 
 ## Dataset
-Taobao dataset from [EasyRec](https://github.com/AlibabaPAI/EasyRec) is used.
+Train & eval dataset using ***Taobao dataset***.
 ### Prepare
+We provide the dataset in two formats:
+1. **CSV Format**
 Put data file **taobao_train_data & taobao_test_data** into ./data/
-For details of Data download, see [EasyRec](https://github.com/AlibabaPAI/EasyRec/#GetStarted)
+These files are available at [Taobao CSV Dataset](https://deeprec-dataset.oss-cn-beijing.aliyuncs.com/csv_dataset/taobao.tar.gz).
+2. **Parquet Format**
+Put data file **taobao_train_data.parquet & taobao_test_data.parquet** into ./data/
+These files are available at [Taobao Parquet Dataset](https://deeprec-dataset.oss-cn-beijing.aliyuncs.com/parquet_dataset/taobao_price_string.tar.gz).
 
 ### Fields
 The dataset contains 20 columns, details as follow:

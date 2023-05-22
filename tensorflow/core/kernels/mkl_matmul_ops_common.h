@@ -26,6 +26,9 @@ limitations under the License.
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/util/mkl_types.h"
 #include "tensorflow/core/util/mkl_util.h"
+#ifdef DNNL_AARCH64_USE_ACL
+#include "tensorflow/core/platform/mutex.h"
+#endif
 
 using dnnl::inner_product_backward_weights;
 using dnnl::inner_product_forward;
@@ -57,6 +60,7 @@ struct MklDnnMatMulFwdParams {
   MEMORY_FORMAT weight_format;
   MEMORY_FORMAT dst_format;
   string dtypes = string("");
+  bool const_weight;
   struct PostOpParam {
     string name;
     std::vector<float> param;
@@ -67,14 +71,16 @@ struct MklDnnMatMulFwdParams {
                         memory::dims bias_dims, memory::dims dst_dims,
                         MEMORY_FORMAT src_format = MEMORY_FORMAT::any,
                         MEMORY_FORMAT weight_format = MEMORY_FORMAT::any,
-                        MEMORY_FORMAT dst_format = MEMORY_FORMAT::any)
+                        MEMORY_FORMAT dst_format = MEMORY_FORMAT::any,
+                        bool const_weight = false)
       : src_dims(src_dims),
         weight_dims(weight_dims),
         bias_dims(bias_dims),
         dst_dims(dst_dims),
         src_format(src_format),
         weight_format(weight_format),
-        dst_format(dst_format) {}
+        dst_format(dst_format),
+        const_weight(const_weight) {}
 };
 
 // With quantization, input, weight, bias, and output can have different types.
@@ -106,6 +112,9 @@ class MklDnnMatMulFwdPrimitive : public MklPrimitive {
   void Execute(const Tinput* src_data, const Tweight* weight_data,
                const Tbias* bias_data, Toutput* dst_data,
                std::shared_ptr<stream> fwd_stream) {
+#ifdef DNNL_AARCH64_USE_ACL
+    mutex_lock lock(primitive_execution_mu_);
+#endif
 #ifdef ENABLE_DNNL_THREADPOOL
     context_.src_mem->set_data_handle(
         static_cast<void*>(const_cast<Tinput*>(src_data)), *fwd_stream);
@@ -199,7 +208,8 @@ class MklDnnMatMulFwdPrimitive : public MklPrimitive {
                                             MEMORY_FORMAT::any));
     // Create an inner-product.
     context_.fwd_desc.reset(new inner_product_forward::desc(
-        prop_kind::forward_inference, *context_.src_md, *context_.weight_md,
+        matmul_fwd_params.const_weight ? prop_kind::forward_inference : prop_kind::forward_training,
+        *context_.src_md, *context_.weight_md,
         *context_.bias_md, *context_.dst_md));
     context_.fwd_pd.reset(new inner_product_forward::primitive_desc(
         *context_.fwd_desc, cpu_engine_));
@@ -210,7 +220,7 @@ class MklDnnMatMulFwdPrimitive : public MklPrimitive {
     dnnl::post_ops post_ops;
     if (!post_op_params.empty()) {
       for (auto const& post_op_param : post_op_params) {
-        if (post_op_param.name == "relu") {
+        if (post_op_param.name == "relu" || post_op_param.name == "leakyrelu") {
           DCHECK_EQ(post_op_param.param.size(), 3);
           float op_scale = post_op_param.param[0];
           float op_alpha = post_op_param.param[1];
@@ -269,6 +279,7 @@ class MklDnnMatMulFwdPrimitive : public MklPrimitive {
                  (post_op_param.name == "gelu_erf") ||
                  (post_op_param.name == "sum") ||
                  (post_op_param.name == "tanh") ||
+                 (post_op_param.name == "leakyrelu") ||
                  (post_op_param.name == "output_scale"));
         }
       }
@@ -303,6 +314,11 @@ class MklDnnMatMulFwdPrimitive : public MklPrimitive {
   }
 
   struct MklDnnMatMulFwdContext context_;
+
+#ifdef DNNL_AARCH64_USE_ACL
+  // Guards Execution()
+  mutex primitive_execution_mu_;
+#endif
 };
 
 template <typename T, typename Tinput, typename Tweight, typename Tbias,
@@ -362,7 +378,8 @@ class MklDnnMatMulFwdPrimitiveFactory : public MklPrimitiveFactory<T> {
     for (auto const& post_op_param : dnnl_matmul_fwd_dims.post_op_params) {
       if (post_op_param.name == "relu" || post_op_param.name == "relu6" ||
           post_op_param.name == "elu" || post_op_param.name == "gelu" ||
-          post_op_param.name == "gelu_erf" || post_op_param.name == "tanh") {
+          post_op_param.name == "gelu_erf" || post_op_param.name == "tanh" ||
+          post_op_param.name == "leakyrelu") {
         DCHECK_EQ(post_op_param.param.size(), 3);
         key_creator.AddAsKey(post_op_param.name);
         key_creator.AddAsKey(post_op_param.param[0]);
@@ -564,6 +581,9 @@ class MklMatMulPrimitive : public MklPrimitive {
 
   void Execute(const T* a_data, const T* b_data, T* c_data,
                std::shared_ptr<stream> stream) {
+#ifdef DNNL_AARCH64_USE_ACL
+    mutex_lock lock(primitive_execution_mu_);
+#endif
 #ifdef ENABLE_DNNL_THREADPOOL
     context_.a_mem->set_data_handle(static_cast<void*>(const_cast<T*>(a_data)),
                                     *stream);
@@ -582,6 +602,11 @@ class MklMatMulPrimitive : public MklPrimitive {
     context_.a_mem->set_data_handle(DummyData);
     context_.b_mem->set_data_handle(DummyData);
     context_.c_mem->set_data_handle(DummyData);
+  }
+
+  std::shared_ptr<dnnl::matmul::primitive_desc>
+  GetPrimitiveDesc() const {
+    return context_.prim_desc;
   }
 
  private:
@@ -674,6 +699,10 @@ class MklMatMulPrimitive : public MklPrimitive {
   }
 
   struct MklMatMulContext context_;
+
+#ifdef DNNL_AARCH64_USE_ACL
+  mutex primitive_execution_mu_;
+#endif
 };
 
 template <typename T>
@@ -768,17 +797,17 @@ void dnnl_gemm(char transa, char transb, int64_t m, int64_t n, int64_t k,
   bool do_not_cache = MklPrimitiveFactory<T>::IsPrimitiveMemOptEnabled();
   MklMatMulParams params(a_dims, b_dims, c_dims, a_strides, b_strides,
                          c_strides);
+  auto st = ExecuteSingleThreadedGemm(m, n, k);
+  MklDnnThreadPool eigen_tp(ctx, st ? 1 : -1);
   MklMatMulPrimitive<T>* matmul_prim =
       MklMatMulPrimitiveFactory<T>::Get(params, do_not_cache);
 
   // Execute matmul primitive.
   std::shared_ptr<stream> cpu_stream;
   if (ExecuteSingleThreadedGemm(m, n, k)) {
-    MklDnnThreadPool eigen_tp(ctx, 1);
     cpu_stream.reset(CreateStream(&eigen_tp, matmul_prim->GetEngine()));
     matmul_prim->Execute(a, b, c, cpu_stream);
   } else {
-    MklDnnThreadPool eigen_tp(ctx);
     cpu_stream.reset(CreateStream(&eigen_tp, matmul_prim->GetEngine()));
     matmul_prim->Execute(a, b, c, cpu_stream);
   }

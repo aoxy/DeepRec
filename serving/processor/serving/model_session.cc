@@ -1,5 +1,4 @@
 #include <random>
-#include "serving/processor/serving/custom_thread_pool.h"
 #include "serving/processor/serving/model_session.h"
 #include "serving/processor/serving/model_message.h"
 #include "serving/processor/serving/tracer.h"
@@ -11,6 +10,7 @@
 #include "tensorflow/cc/saved_model/tag_constants.h"
 #include "tensorflow/cc/saved_model/reader.h"
 #include "tensorflow/cc/saved_model/constants.h"
+#include "tensorflow/core/common_runtime/custom_thread_pool.h"
 #include "tensorflow/core/platform/protobuf_internal.h"
 #include "tensorflow/core/lib/io/path.h"
 #include "tensorflow/core/lib/random/random.h"
@@ -117,7 +117,7 @@ void CreateCustomThreadPool(CustomThreadPoolImpl** tp, mutex& mu,
                             int num, const std::string& name) {
   mutex_lock lock(mu);
   if (!(*tp)) {
-    *tp = new CustomThreadPoolImpl(num, name);
+    *tp = new CustomThreadPoolImpl(name, num);
   }
 }
 
@@ -168,8 +168,13 @@ Status ModelSessionMgr::CreateSession(Session** session) {
 
 Status ModelSessionMgr::CreateSessionGroup(
     SessionGroup** session_group, ModelConfig* config) {
+  SessionGroupMetadata metadata;
+  metadata.session_count = config->session_num;
+  metadata.model_id = 0;
+  metadata.gpu_ids = config->gpu_ids;
+  metadata.cpusets = config->cpusets;
   TF_RETURN_IF_ERROR(NewSessionGroup(*session_options_,
-                                     session_group, config->session_num));
+                                     session_group, metadata));
   TF_RETURN_IF_ERROR((*session_group)->Create(meta_graph_def_.graph_def()));
   asset_file_defs_.clear();
   return util::GetAssetFileDefs(meta_graph_def_, &asset_file_defs_);
@@ -222,9 +227,10 @@ Status ModelSessionMgr::RunRestoreOps(
 
 ModelSession::ModelSession(SessionGroup* s,
     const std::string& select_session_policy,
-    const Version& version, IFeatureStoreMgr* sparse_storage)
+    const Version& version, IFeatureStoreMgr* sparse_storage,
+    const std::string& graph_hash_value)
     : session_group_(s), counter_(0), is_local_(false),
-      version_(version) {
+      version_(version), graph_hash_value_(graph_hash_value) {
   if (select_session_policy == "MOD") {
     select_session_policy_ = SelectSessionPolicy::MOD;
   } else if (select_session_policy == "RR") {
@@ -246,9 +252,10 @@ ModelSession::ModelSession(SessionGroup* s,
 }
 
 ModelSession::ModelSession(SessionGroup* s,
-    const std::string& select_session_policy, const Version& version)
+    const std::string& select_session_policy, const Version& version,
+    const std::string& graph_hash_value)
     : session_group_(s), counter_(0), is_local_(true),
-      version_(version) {
+      version_(version), graph_hash_value_(graph_hash_value) {
   if (select_session_policy == "MOD") {
     select_session_policy_ = SelectSessionPolicy::MOD;
   } else if (select_session_policy == "RR") {
@@ -265,14 +272,50 @@ ModelSession::ModelSession(SessionGroup* s,
 }
 
 ModelSession::~ModelSession() {
+  for (auto iter : incr_restore_handler_map) {
+    const_cast<Session*>(iter.first)
+        ->ReleaseCallable(*iter.second).IgnoreError();
+  }
+
+  for (auto iter : main_op_handler_map) {
+    const_cast<Session*>(iter.first)
+        ->ReleaseCallable(*iter.second).IgnoreError();
+  }
+
   if (session_group_) {
     delete session_group_;
     session_group_ = nullptr;
   }
 }
 
-Session* ModelSession::GetSession() {
-  return session_group_->GetLeaderSession();
+Session::CallableHandle* ModelSession::GetIncrRestoreHandler(const Session* sess) {
+  auto iter = incr_restore_handler_map.find(sess);
+  if (iter == incr_restore_handler_map.end()) {
+    return nullptr;
+  }
+  return iter->second;
+}
+
+Session::CallableHandle* ModelSession::GetMainOpHandler(const Session* sess) {
+  auto iter = main_op_handler_map.find(sess);
+  if (iter == main_op_handler_map.end()) {
+    return nullptr;
+  }
+  return iter->second;
+}
+
+void ModelSession::SetIncrRestoreHandler(const Session* sess,
+    Session::CallableHandle* handler) {
+  incr_restore_handler_map[sess] = handler;
+}
+
+void ModelSession::SetMainOpHandler(const Session* sess,
+    Session::CallableHandle* handler) {
+  main_op_handler_map[sess] = handler;
+}
+
+std::vector<Session*> ModelSession::GetLeaderSessions() {
+  return session_group_->GetLeaderSessions();
 }
 
 int ModelSession::GetServingSessionId() {
@@ -289,6 +332,16 @@ int ModelSession::GetServingSessionId() {
 }
 
 Status ModelSession::Predict(Request& req, Response& resp) {
+  return InternalPredict(req, resp, GetServingSessionId());
+}
+
+Status ModelSession::Predict(Request& req, Response& resp,
+                             int sess_id) {
+  return InternalPredict(req, resp, sess_id);
+}
+
+Status ModelSession::InternalPredict(Request& req, Response& resp,
+                                     int sess_id) {
   if (is_local_) {
     return Status(error::Code::INTERNAL,
         "Local sparse storage, please use LocalPredict.");
@@ -298,64 +351,102 @@ Status ModelSession::Predict(Request& req, Response& resp) {
   req.inputs.emplace_back(model_version_name_, model_version_tensor_);
   ++counter_;
   Status status;
+  tensorflow::RunOptions run_options;
+  tensorflow::RunMetadata run_metadata;
+  run_metadata.set_graph_signature(graph_hash_value_);
   if (Tracer::GetTracer()->NeedTracing()) {
-    tensorflow::RunOptions run_options;
     run_options.set_trace_level(tensorflow::RunOptions::FULL_TRACE);
-    tensorflow::RunMetadata run_metadata;
     // TODO: which session selected to run on, add some policy here
     status = session_group_->Run(run_options, req.inputs,
         req.output_tensor_names, {}, &resp.outputs,
-        &run_metadata, GetServingSessionId());
+        &run_metadata, sess_id);
     Tracer::GetTracer()->GenTimeline(run_metadata);
   } else {
-    status = session_group_->Run(req.inputs, req.output_tensor_names,
-        {}, &resp.outputs, GetServingSessionId());
+    status = session_group_->Run(run_options, req.inputs,
+		req.output_tensor_names, {}, &resp.outputs,
+		&run_metadata, sess_id);
   }
   --counter_;
   return status;
 }
 
-Status ModelSession::LocalPredict(Request& req, Response& resp) {
+Status ModelSession::LocalPredict(Request& req,
+                                  Response& resp) {
+  return InternalLocalPredict(req, resp,
+      GetServingSessionId());
+}
+
+Status ModelSession::LocalPredict(Request& req,
+                                  Response& resp,
+                                  int sess_id) {
+  return InternalLocalPredict(req, resp, sess_id);
+}
+
+Status ModelSession::InternalLocalPredict(Request& req,
+                                          Response& resp,
+                                          int sess_id) {
   if (!is_local_) {
     return Status(error::Code::INTERNAL,
         "Remote sparse storage, please use Predict.");
   }
   ++counter_;
   Status status;
+  tensorflow::RunOptions run_options;
+  tensorflow::RunMetadata run_metadata;
+  run_metadata.set_graph_signature(graph_hash_value_);
   if (Tracer::GetTracer()->NeedTracing()) {
-    tensorflow::RunOptions run_options;
     run_options.set_trace_level(tensorflow::RunOptions::FULL_TRACE);
-    tensorflow::RunMetadata run_metadata;
     // TODO: which session selected to run on, add some policy here
     status = session_group_->Run(run_options, req.inputs,
         req.output_tensor_names, {}, &resp.outputs,
-        &run_metadata, GetServingSessionId());
+        &run_metadata, sess_id);
     Tracer::GetTracer()->GenTimeline(run_metadata); 
   } else {
-    status = session_group_->Run(req.inputs, req.output_tensor_names,
-        {}, &resp.outputs, GetServingSessionId());
+    status = session_group_->Run(run_options, req.inputs,
+        req.output_tensor_names, {}, &resp.outputs,
+        &run_metadata, sess_id);
   }
   --counter_;
   return status;
 }
 
+Status ModelSession::Warmup(Request& req, Response& resp, bool local) {
+  int N = session_group_->GetSessionNum();
+  for (int i = 0; i < N; ++i) {
+    Status s;
+    if (local) {
+      s = LocalPredict(req, resp, i);
+    } else {
+      s = Predict(req, resp, i);
+    }
+    if (!s.ok()) return s;
+  }
+
+  return Status::OK();
+}
+
 Status ModelSessionMgr::Predict(Request& req, Response& resp) {
-  return serving_session_->Predict(req, resp);
+  return serving_model_session_->Predict(req, resp);
 }
 
 Status ModelSessionMgr::LocalPredict(Request& req, Response& resp) {
-  return serving_session_->LocalPredict(req, resp);
+  return serving_model_session_->LocalPredict(req, resp);
+}
+
+Status ModelSessionMgr::Warmup(Request& req, Response& resp, bool local) {
+  return serving_model_session_->Warmup(req, resp, local);
 }
 
 Status ModelSessionMgr::CreateModelSession(
     const Version& version, const char* ckpt_name,
     IFeatureStoreMgr* sparse_storage, bool is_incr_ckpt,
-    bool is_initialize, ModelConfig* config) {
+    bool is_initialize, ModelConfig* config,
+    const std::string& graph_hash_value) {
   ModelSession* new_model_session = nullptr;
   TF_RETURN_IF_ERROR(
       CreateModelSession(version, ckpt_name, sparse_storage,
                          is_incr_ckpt, is_initialize, config,
-                         &new_model_session));
+                         &new_model_session, graph_hash_value));
   ResetServingSession(new_model_session);
   return Status::OK();
 }
@@ -364,11 +455,12 @@ Status ModelSessionMgr::CreateModelSession(
     const Version& version, const char* ckpt_name,
     IFeatureStoreMgr* sparse_storage, bool is_incr_ckpt,
     bool is_initialize, ModelConfig* config,
-    ModelSession** new_model_session) {
+    ModelSession** new_model_session,
+    const std::string& graph_hash_value) {
   SessionGroup* session_group = nullptr;
-  Session* session = nullptr;
+  std::vector<Session*> sessions;
   TF_RETURN_IF_ERROR(CreateSessionGroup(&session_group, config));
-  session = session_group->GetLeaderSession();
+  sessions = session_group->GetLeaderSessions();
 
   Version real_version = version;
   Status status;
@@ -415,12 +507,14 @@ Status ModelSessionMgr::CreateModelSession(
   }
   TF_RETURN_IF_ERROR(status);
 
-  // only one instance can restore sparse variable
-  status = RunRestoreOps(ckpt_name,
-        real_version.full_ckpt_version,
-        real_version.savedmodel_dir.c_str(),
-        session, sparse_storage, is_incr_ckpt,
-        locked, latest_version);
+  for (auto session : sessions) {
+    // only one instance can restore sparse variable
+    status = RunRestoreOps(ckpt_name,
+          real_version.full_ckpt_version,
+          real_version.savedmodel_dir.c_str(),
+          session, sparse_storage, is_incr_ckpt,
+          locked, latest_version);
+  }
 
   // Update model_version and then Release lock after import
   if (locked) {
@@ -443,7 +537,7 @@ Status ModelSessionMgr::CreateModelSession(
   // ResetServingSession(session, real_version, sparse_storage);
   *new_model_session = new ModelSession(
       session_group, config->select_session_policy,
-      version, sparse_storage);
+      version, sparse_storage, graph_hash_value);
 
   return Status::OK();
 }
@@ -451,28 +545,35 @@ Status ModelSessionMgr::CreateModelSession(
 Status ModelSessionMgr::CreateModelSession(
     const Version& version,
     const char* saved_model_path,
-    ModelConfig* config) {
+    ModelConfig* config,
+    const std::string& graph_hash_value) {
   SessionGroup* session_group = nullptr;
-  Session* session = nullptr;
+  std::vector<Session*> sessions;
   TF_RETURN_IF_ERROR(CreateSessionGroup(&session_group, config));
-  session = session_group->GetLeaderSession();
+  sessions = session_group->GetLeaderSessions();
   TF_RETURN_IF_ERROR(util::ValidateSavedTensors(meta_graph_def_.graph_def()));
 
-  TF_RETURN_IF_ERROR(
-      util::RunRestore(*run_options_, saved_model_path,
-          meta_graph_def_.saver_def().restore_op_name(),
-          meta_graph_def_.saver_def().filename_tensor_name(),
-          asset_file_defs_, session));
+  LOG(INFO) << "CreateModelSession get leader sessions count: " << sessions.size();
+  for (auto session : sessions) {
+    TF_RETURN_IF_ERROR(
+        util::RunRestore(*run_options_, saved_model_path,
+            meta_graph_def_.saver_def().restore_op_name(),
+            meta_graph_def_.saver_def().filename_tensor_name(),
+            asset_file_defs_, session));
+  }
 
   string init_op_name;
   TF_RETURN_IF_ERROR(
       util::GetInitOp(saved_model_path, meta_graph_def_, &init_op_name));
-  TF_RETURN_IF_ERROR(util::RunInitOp(*run_options_, saved_model_path,
-                                     meta_graph_def_, asset_file_defs_,
-                                     session, init_op_name));
+  for (auto session : sessions) {
+    TF_RETURN_IF_ERROR(util::RunInitOp(*run_options_, saved_model_path,
+                                       meta_graph_def_, asset_file_defs_,
+                                       session, init_op_name));
+  }
 
   auto new_model_session = new ModelSession(
-      session_group, config->select_session_policy, version);
+      session_group, config->select_session_policy,
+      version, graph_hash_value);
   ResetServingSession(new_model_session);
 
   return Status::OK();
@@ -481,12 +582,13 @@ Status ModelSessionMgr::CreateModelSession(
 Status ModelSessionMgr::CreateModelSession(
     const Version& version, const char* full_ckpt_name,
     const char* incr_ckpt_name, bool is_incr_ckpt,
-    bool is_initialize, ModelConfig* config) {
+    bool is_initialize, ModelConfig* config,
+    const std::string& graph_hash_value) {
   ModelSession* new_model_session = nullptr;
   TF_RETURN_IF_ERROR(
       CreateModelSession(version, full_ckpt_name, incr_ckpt_name,
                          is_incr_ckpt, is_initialize, config,
-                         &new_model_session));
+                         &new_model_session, graph_hash_value));
   if (!is_incr_ckpt) {
     ResetServingSession(new_model_session);
   }
@@ -498,7 +600,8 @@ Status ModelSessionMgr::CreateModelSession(
     const Version& version, const char* full_ckpt_name,
     const char* incr_ckpt_name, bool is_incr_ckpt,
     bool is_initialize, ModelConfig* config,
-    ModelSession** new_model_session) {
+    ModelSession** new_model_session,
+    const std::string& graph_hash_value) {
   std::string restore_op_name =
       meta_graph_def_.saver_def().restore_op_name();
   std::string filename_tensor_name =
@@ -506,15 +609,15 @@ Status ModelSessionMgr::CreateModelSession(
   std::string incr_filename_tensor_name =
       meta_graph_def_.incr_saver_def().filename_tensor_name();
   SessionGroup* session_group = nullptr;
-  Session* session = nullptr;
+  std::vector<Session*> sessions;
   if (is_incr_ckpt) {
     // Use serving session to update delta model
-    session = serving_session_->GetSession();
+    sessions = serving_model_session_->GetLeaderSessions();
     restore_op_name =
         meta_graph_def_.incr_saver_def().restore_op_name();
   } else {
     TF_RETURN_IF_ERROR(CreateSessionGroup(&session_group, config));
-    session = session_group->GetLeaderSession();
+    sessions = session_group->GetLeaderSessions();
   }
 
   thread::ThreadPoolOptions thread_opt = thread::ThreadPoolOptions();
@@ -528,31 +631,74 @@ Status ModelSessionMgr::CreateModelSession(
         GetModelUpdateInterThreadPool(config->model_update_inter_threads);
   }
 
-  TF_RETURN_IF_ERROR(util::RunRestoreCheckpoint(
-      is_incr_ckpt, *run_options_, full_ckpt_name,
-      incr_ckpt_name, version.savedmodel_dir.c_str(),
-      restore_op_name, filename_tensor_name,
-      incr_filename_tensor_name, asset_file_defs_, session,
-      thread_opt));
+  LOG(INFO) << "CreateModelSession get leader sessions count: " << sessions.size();
 
-  if (util::HasMainOp(meta_graph_def_)) {
-    TF_RETURN_IF_ERROR(util::RunMainOp(*run_options_,
-        version.savedmodel_dir.c_str(),
-        meta_graph_def_, asset_file_defs_,
-        session, kSavedModelMainOpKey));
+  if (is_incr_ckpt) {
+    for (auto session : sessions) {
+      bool init_create_handler = false;
+      Session::CallableHandle* incr_restore_handler = nullptr;
+      Session::CallableHandle* main_op_handler = nullptr;
+      incr_restore_handler = serving_model_session_->GetIncrRestoreHandler(session);
+      main_op_handler = serving_model_session_->GetMainOpHandler(session);
+      if (!incr_restore_handler || !main_op_handler) {
+        init_create_handler = true;
+      }
+
+      TF_RETURN_IF_ERROR(util::RunIncrRestoreCheckpoint(
+          *run_options_, full_ckpt_name,
+          incr_ckpt_name, version.savedmodel_dir.c_str(),
+          restore_op_name, filename_tensor_name,
+          incr_filename_tensor_name, asset_file_defs_, session,
+          thread_opt, &incr_restore_handler));
+
+      if (util::HasMainOp(meta_graph_def_)) {
+        TF_RETURN_IF_ERROR(util::RunIncrMainOp(
+            *run_options_, version.savedmodel_dir.c_str(),
+            meta_graph_def_, asset_file_defs_,
+            session, kSavedModelMainOpKey,
+            thread_opt, &main_op_handler));
+      } else {
+        TF_RETURN_IF_ERROR(util::RunIncrMainOp(
+            *run_options_, version.savedmodel_dir.c_str(),
+            meta_graph_def_, asset_file_defs_, session,
+            kSavedModelLegacyInitOpKey, thread_opt, &main_op_handler));
+      }
+
+      if (init_create_handler) {
+        serving_model_session_->SetIncrRestoreHandler(
+            session, incr_restore_handler);
+        serving_model_session_->SetMainOpHandler(
+            session, main_op_handler);
+      }
+    }
   } else {
-    TF_RETURN_IF_ERROR(util::RunMainOp(
-        *run_options_, version.savedmodel_dir.c_str(),
-        meta_graph_def_, asset_file_defs_, session,
-        kSavedModelLegacyInitOpKey));
+    for (auto session : sessions) {
+      TF_RETURN_IF_ERROR(util::RunRestoreCheckpoint(
+          *run_options_, full_ckpt_name,
+          version.savedmodel_dir.c_str(),
+          restore_op_name, filename_tensor_name,
+          incr_filename_tensor_name, asset_file_defs_, session));
+
+      if (util::HasMainOp(meta_graph_def_)) {
+        TF_RETURN_IF_ERROR(util::RunMainOp(*run_options_,
+            version.savedmodel_dir.c_str(),
+            meta_graph_def_, asset_file_defs_,
+            session, kSavedModelMainOpKey));
+      } else {
+        TF_RETURN_IF_ERROR(util::RunMainOp(
+            *run_options_, version.savedmodel_dir.c_str(),
+            meta_graph_def_, asset_file_defs_, session,
+            kSavedModelLegacyInitOpKey));
+      }
+    }
   }
 
   if (!is_incr_ckpt) {
-    // ResetServingSession(session, version);
     *new_model_session = new ModelSession(
-      session_group, config->select_session_policy, version);
+      session_group, config->select_session_policy,
+      version, graph_hash_value);
   } else {
-    serving_session_->UpdateVersion(version);
+    serving_model_session_->UpdateVersion(version);
   }
 
   return Status::OK();
@@ -575,8 +721,8 @@ Status ModelSessionMgr::CleanupModelSession() {
 }
 
 void ModelSessionMgr::ResetServingSession(ModelSession* model_session) {
-  auto tmp = serving_session_;
-  serving_session_ = model_session;
+  auto tmp = serving_model_session_;
+  serving_model_session_ = model_session;
 
   if (tmp == nullptr) return;
 
@@ -592,7 +738,7 @@ void ModelSessionMgr::ResetServingSession(ModelSession* model_session) {
 Status ModelSessionMgr::GetServingModelInfo(
     tensorflow::processor::ServingModelInfo& model_info) {
   model_info.model_path =
-      serving_session_->GetVersion().full_ckpt_name;
+      serving_model_session_->GetVersion().full_ckpt_name;
   return Status::OK();
 }
 

@@ -7671,6 +7671,74 @@ class EmbeddingColumnTest(test.TestCase):
           self.assertAlmostEqual(emb_r[i][j], emb_right[i][j])
    
   @test_util.run_deprecated_v1
+  def testEmbeddingVariableForSharedEmbeddingColumnsWithPartitionNum(self):
+    columns_list=[]
+    columns_list.append(fc.categorical_column_with_embedding("col_emb", dtype=dtypes.string, partition_num=4))
+    W = fc.shared_embedding_columns(columns_list,
+            dimension=3,
+            initializer=init_ops.ones_initializer(dtypes.float32),
+            shared_embedding_collection_name="xxxxx_shared")
+
+    ids={}
+    ids["col_emb"] = sparse_tensor.SparseTensor(indices=[[0,0],[1,0],[2,0],[3,0],[4,0]], values=["aaaa","bbbbb","ccc","4nn","5b"], dense_shape=[5, 5])
+    emb = fc_old.input_layer(ids, W)
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    opt = ftrl.FtrlOptimizer(0.1, l1_regularization_strength=2.0, l2_regularization_strength=0.00001)
+    g_v = opt.compute_gradients(loss)
+    train_op = opt.apply_gradients(g_v)
+    init = variables_lib.global_variables_initializer()
+    saver = saver_module.Saver()
+
+  @test_util.run_deprecated_v1
+  def testEmbeddingVariableForInt32ID(self):
+    print("testEmbeddingVariableForInt32ID")
+    checkpoint_directory = self.get_temp_dir()
+    columns = fc.categorical_column_with_embedding(
+                                        "col_emb",
+                                        dtype=dtypes.int32)
+    W = fc.embedding_column(categorical_column=columns,
+            dimension=3,
+            initializer=init_ops.ones_initializer(dtypes.float32),
+            combiner="mean")
+    ids = {}
+    ids["col_emb"] = sparse_tensor.SparseTensor(
+                      indices=[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0]],
+                      values=math_ops.cast([0,0,0,1,1,2], dtypes.int32),
+                      dense_shape=[6, 1])
+    emb= fc_old.input_layer(
+           ids, [W])
+    fun = math_ops.multiply(emb, 2.0, name='multiply')
+    loss = math_ops.reduce_sum(fun, name='reduce_sum')
+    opt = ftrl.FtrlOptimizer(0.1, l1_regularization_strength=2.0, l2_regularization_strength=0.00001)
+    g_v = opt.compute_gradients(loss)
+    train_op = opt.apply_gradients(g_v)
+    saver = saver_module.Saver()
+    init = variables_lib.global_variables_initializer()
+    with self.test_session() as sess:
+      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_VAR_OPS))
+      sess.run(ops.get_collection(ops.GraphKeys.EV_INIT_SLOT_OPS))
+      sess.run([init])
+      emb_ori = sess.run([emb, train_op])
+      save_path = saver.save(sess, os.path.join(checkpoint_directory, "model1.ckpt"), global_step=12345)
+      print(save_path)
+      #for name, shape in checkpoint_utils.list_variables(checkpoint_directory):
+      #  print('loading... ', name, shape)
+    with self.test_session() as sess:
+      saver.restore(sess, os.path.join(checkpoint_directory, "model1.ckpt-12345"))
+      emb_right = [[0.8282884, 0.8282884, 0.8282884],
+                   [0.8282884, 0.8282884, 0.8282884],
+                   [0.8282884, 0.8282884, 0.8282884],
+                   [0.7927219, 0.7927219, 0.7927219],
+                   [0.7927219, 0.7927219, 0.7927219],
+                   [0.6880261, 0.6880261, 0.6880261]]
+      emb_ori = sess.run(emb)
+      for i in range(6):
+        for j in range(3):
+          self.assertAlmostEqual(emb_ori[i][j], emb_right[i][j])
+
+
+  @test_util.run_deprecated_v1
   def test_transform_feature(self):
     a = fc.categorical_column_with_identity(key='aaa', num_buckets=3)
     a_embedded = fc.embedding_column(a, dimension=2)
@@ -8515,6 +8583,7 @@ class EmbeddingColumnTest(test.TestCase):
         'trainable': True,
         'coalesced_scope': None,
         'do_fusion': False,
+        'group_name': '',
     }, config)
 
     custom_objects = {'TruncatedNormal': init_ops.TruncatedNormal}
@@ -8570,6 +8639,7 @@ class EmbeddingColumnTest(test.TestCase):
         'trainable': True,
         'coalesced_scope': None,
         'do_fusion': False,
+        'group_name': '',
     }, config)
 
     custom_objects = {

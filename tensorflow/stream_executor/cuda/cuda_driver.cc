@@ -735,12 +735,21 @@ GpuDriver::ContextGetSharedMemConfig(GpuContext* context) {
 }
 
 /* static */ bool GpuDriver::CreateStream(GpuContext* context,
-                                          CUstream* stream) {
+                                          CUstream* stream,
+                                          int priority) {
   // TODO(leary) can we switch this to CU_STREAM_NON_BLOCKING or will that mess
   // up synchronization with respect to memsets and any other things that have
   // to occur on the default stream?
   ScopedActivateContext activated{context};
-  CUresult res = cuStreamCreate(stream, 0);
+  CUresult res;
+  // If the priority is 0, then use the previous api to create the stream with
+  // the default priority for backward compatibility. Probably there is no
+  // difference in using the new api call but leaving it as is for now.
+  if (priority == 0) {
+    res = cuStreamCreate(stream, 0);
+  } else {
+    res = cuStreamCreateWithPriority(stream, 0, priority);
+  }
   if (res != CUDA_SUCCESS) {
     LOG(ERROR) << "could not allocate CUDA stream for context "
                << context->context() << ": " << ToString(res);
@@ -1637,6 +1646,14 @@ static port::StatusOr<T> GetSimpleAttribute(CUdevice device,
     GpuContext* context, GpuGraphHandle graph, GpuGraphExecHandle* graph_exec) {
 #if CUDA_VERSION >= 11000
   ScopedActivateContext activated{context};
+#if CUDA_VERSION >= 12000
+  CUresult res = cuGraphInstantiate(graph_exec, graph, 0LL);
+  if (res != CUDA_SUCCESS) {
+    LOG(ERROR) << "could not instantiate executable graph for context "
+               << context->context() << ": " << ToString(res);
+    return false;
+  }
+#else
   char log_buffer[1024];
   CUresult res = cuGraphInstantiate(graph_exec, graph,
                                     /* error_node = */ nullptr, log_buffer,
@@ -1647,6 +1664,7 @@ static port::StatusOr<T> GetSimpleAttribute(CUdevice device,
                << log_buffer;
     return false;
   }
+#endif
 
   VLOG(1) << "successfully instantiated executable graph for context "
           << context->context() << " on thread";
@@ -1663,9 +1681,14 @@ static port::StatusOr<T> GetSimpleAttribute(CUdevice device,
                                                    GpuGraphHandle graph) {
 #if CUDA_VERSION >= 11000
   ScopedActivateContext activated{context};
+#if CUDA_VERSION >= 12000
+  CUgraphExecUpdateResultInfo result_info;
+  CUresult res = cuGraphExecUpdate(graph_exec, graph, &result_info);
+#else
   CUresult res = cuGraphExecUpdate(graph_exec, graph,
                                    /* error_node = */ nullptr,
                                    /* update_result = */ nullptr);
+#endif
   if (res != CUDA_SUCCESS) {
     // VLOG because updating a graph is often done optimistically before falling
     // back to instantiating a new graph, so an ERROR is not appropriate.

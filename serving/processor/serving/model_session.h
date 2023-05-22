@@ -7,6 +7,7 @@
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/protobuf/meta_graph.pb.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/public/session.h"
 #include <thread>
 #include <atomic>
 
@@ -27,16 +28,27 @@ enum SelectSessionPolicy {
 };
 struct ModelSession {
   ModelSession(SessionGroup* s, const std::string& select_session_policy,
-      const Version& version, IFeatureStoreMgr* sparse_storage);
+      const Version& version, IFeatureStoreMgr* sparse_storage,
+      const std::string& graph_hash_value);
   ModelSession(SessionGroup* s, const std::string& select_session_policy,
-      const Version& version);
+      const Version& version, const std::string& graph_hash_value);
   virtual ~ModelSession();
 
   Status Predict(Request& req, Response& resp);
+  Status Predict(Request& req, Response& resp, int sess_id);
   Status LocalPredict(Request& req, Response& resp);
+  Status LocalPredict(Request& req, Response& resp, int sess_id);
   Version GetVersion() {return version_;}
   void UpdateVersion(const Version& v) { version_ = v; }
-  Session* GetSession();
+  std::vector<Session*> GetLeaderSessions();
+  Status Warmup(Request& req, Response& resp, bool local=true);
+
+  Session::CallableHandle* GetIncrRestoreHandler(const Session* sess);
+  Session::CallableHandle* GetMainOpHandler(const Session* sess);
+  void SetIncrRestoreHandler(const Session* sess,
+      Session::CallableHandle* handler);
+  void SetMainOpHandler(const Session* sess,
+      Session::CallableHandle* handler);
 
   SessionGroup* session_group_ = nullptr;
   SelectSessionPolicy select_session_policy_ =
@@ -51,9 +63,23 @@ struct ModelSession {
   // Local storage or remote storage for sparse variable.
   bool is_local_ = true;
   Version version_;
+  std::string graph_hash_value_;
+
+  // Store the handlers of increment restore related grpahs,
+  // to avoid create executor at every increment restore,
+  // which will decrease inference performence.
+  // Consider multi-session_groups jobs, so we use map here.
+  // and CallableHandle is owned by ModelSession, so we must
+  // delete them at dtor.
+  std::unordered_map<const Session*, Session::CallableHandle*>
+      incr_restore_handler_map;
+  std::unordered_map<const Session*, Session::CallableHandle*>
+      main_op_handler_map;
 
  private:
   int GetServingSessionId();
+  Status InternalPredict(Request& req, Response& resp, int sess_id);
+  Status InternalLocalPredict(Request& req, Response& resp, int sess_id);
 };
 
 class ModelSessionMgr {
@@ -64,35 +90,40 @@ class ModelSessionMgr {
 
   Status Predict(Request& req, Response& resp);
   Status LocalPredict(Request& req, Response& resp);
+  Status Warmup(Request& req, Response& resp, bool local=true);
 
   Status CreateModelSession(
       const Version& version,
       const char* saved_model_path,
-      ModelConfig* config);
+      ModelConfig* config,
+      const std::string& graph_hash_value);
 
   Status CreateModelSession(
       const Version& version, const char* ckpt_name,
       IFeatureStoreMgr* sparse_storage,
       bool is_incr_ckpt, bool is_initialize,
-      ModelConfig* config);
+      ModelConfig* config, const std::string& graph_hash_value);
 
   Status CreateModelSession(
       const Version& version, const char* ckpt_name,
       IFeatureStoreMgr* sparse_storage,
       bool is_incr_ckpt, bool is_initialize,
       ModelConfig* config,
-      ModelSession** new_model_session);
+      ModelSession** new_model_session,
+      const std::string& graph_hash_value);
 
   Status CreateModelSession(
       const Version& version, const char* full_ckpt_name,
       const char* incr_ckpt_name, bool is_incr_ckpt,
-      bool is_initialize, ModelConfig* config);
+      bool is_initialize, ModelConfig* config,
+      const std::string& graph_hash_value);
  
   Status CreateModelSession(
       const Version& version, const char* full_ckpt_name,
       const char* incr_ckpt_name, bool is_incr_ckpt,
       bool is_initialize, ModelConfig* config,
-      ModelSession** new_model_session);
+      ModelSession** new_model_session,
+      const std::string& graph_hash_value);
 
   Status CleanupModelSession();
 
@@ -116,7 +147,7 @@ class ModelSessionMgr {
   void ClearLoop();
 
  protected:
-  ModelSession* serving_session_ = nullptr;
+  ModelSession* serving_model_session_ = nullptr;
 
   MetaGraphDef meta_graph_def_;
   SessionOptions* session_options_;

@@ -32,6 +32,9 @@ limitations under the License.
 #include "tensorflow/core/util/mkl_types.h"
 #include "tensorflow/core/util/mkl_util.h"
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#ifdef DNNL_AARCH64_USE_ACL
+#include "tensorflow/core/platform/mutex.h"
+#endif
 
 using dnnl::concat;
 using dnnl::stream;
@@ -279,6 +282,9 @@ class MklConcatFwdPrimitive : public MklPrimitive {
                const dnnl::memory& dst_data,
                const MklConcatFwdParams& concat_fwd_dims,
                std::shared_ptr<stream> fwd_stream) {
+#ifdef DNNL_AARCH64_USE_ACL
+    mutex_lock lock(primitive_execution_mu_);
+#endif
     DCHECK_EQ(in_data.size(), context_.data_mem.size());
     for (size_t i = 0; i < concat_fwd_dims.num_inputs; i++) {
 #ifdef ENABLE_DNNL_THREADPOOL
@@ -374,6 +380,10 @@ class MklConcatFwdPrimitive : public MklPrimitive {
   }
 
   struct ConcatFwdContext context_;
+  
+#ifdef DNNL_AARCH64_USE_ACL
+  mutex primitive_execution_mu_;
+#endif
 };
 
 // Class to create/cache the OneDNN concat primitives based on the
@@ -714,6 +724,7 @@ class MklConcatOp : public OpKernel {
         concat_dim = mkl_input_shapes[0].TfDimIdx(concat_dim);
 
       if (!inputs.empty()) {
+        MklDnnThreadPool eigen_tp(context);
         if (are_all_mkl_inputs) {
           auto concat_pd = concat::primitive_desc(
               concat_dim, MEMORY_PD_WITHOUT_DATA(srcs_pd, cpu_engine));
@@ -733,7 +744,6 @@ class MklConcatOp : public OpKernel {
           DCHECK(dst_tensor != nullptr) << "Output tensor pointer is NULL";
 
           std::shared_ptr<stream> fwd_cpu_stream;
-          MklDnnThreadPool eigen_tp(context);
           fwd_cpu_stream.reset(CreateStream(&eigen_tp, cpu_engine));
 
           if (dnn_shape_dst.IsMklTensor())
@@ -771,7 +781,6 @@ class MklConcatOp : public OpKernel {
           dst_md = dnn_shape_dst.IsMklTensor() ? dnn_shape_dst.GetMklLayout()
                                                : dst_md;
           std::shared_ptr<stream> fwd_cpu_stream;
-          MklDnnThreadPool eigen_tp(context);
           fwd_cpu_stream.reset(
               CreateStream(&eigen_tp, concat_fwd->GetEngine()));
           dst.SetUsrMem(dst_md, dst_tensor);

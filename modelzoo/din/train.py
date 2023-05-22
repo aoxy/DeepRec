@@ -413,7 +413,7 @@ class DIN():
                 learning_rate=self._learning_rate,
                 global_step=self.global_step)
         else:
-            raise ValueError("Optimzier type error.")
+            raise ValueError("Optimizer type error.")
 
         gradients = optimizer.compute_gradients(self.loss)
         clipped_gradients = [(tf.clip_by_norm(grad, 5), var)
@@ -450,23 +450,40 @@ def build_model_input(filename, batch_size, num_epochs):
         features = all_columns
         return features, labels
 
+    def parse_parquet(value):
+        labels = value.pop(LABEL_COLUMN[0])
+        features = value
+        return features, labels
+
     '''Work Queue Feature'''
     if args.workqueue and not args.tf:
         from tensorflow.python.ops.work_queue import WorkQueue
-        work_queue = WorkQueue([filename])
+        work_queue = WorkQueue([filename], num_epochs=num_epochs)
         # For multiple files：
         # work_queue = WorkQueue([filename, filename1,filename2,filename3])
         files = work_queue.input_dataset()
     else:
         files = filename
     # Extract lines from input files using the Dataset API.
-    dataset = tf.data.TextLineDataset(files)
-    dataset = dataset.shuffle(buffer_size=20000,
-                              seed=args.seed)  # set seed for reproducing
-    dataset = dataset.repeat(num_epochs)
-    dataset = dataset.batch(batch_size)
-    dataset = dataset.map(parse_csv,
-                          num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    if args.parquet_dataset and not args.tf:
+        from tensorflow.python.data.experimental.ops import parquet_dataset_ops
+        dataset = parquet_dataset_ops.ParquetDataset(files, batch_size=batch_size)
+        if args.parquet_dataset_shuffle:
+            dataset = dataset.shuffle(buffer_size=20000,
+                                      seed=args.seed)  # set seed for reproducing
+        if not args.workqueue:
+            dataset = dataset.repeat(num_epochs)
+        dataset = dataset.map(parse_parquet,
+                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    else:
+        dataset = tf.data.TextLineDataset(files)
+        dataset = dataset.shuffle(buffer_size=20000,
+                                  seed=args.seed)  # set seed for reproducing
+        if not args.workqueue:
+            dataset = dataset.repeat(num_epochs)
+        dataset = dataset.batch(batch_size)
+        dataset = dataset.map(parse_csv,
+                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
     dataset = dataset.prefetch(2)
     return dataset
 
@@ -517,7 +534,7 @@ def build_feature_columns(data_location=None):
                 'UID', dtype=tf.string, ev_option=ev_opt)
         elif args.adaptive_emb:
             '''            Adaptive Embedding Feature Part 2 of 2
-            Expcet the follow code, a dict, 'adaptive_mask_tensors', is need as the input of 
+            Expcet the follow code, a dict, 'adaptive_mask_tensors', is need as the input of
             'tf.feature_column.input_layer(adaptive_mask_tensors=adaptive_mask_tensors)'.
             For column 'COL_NAME',the value of adaptive_mask_tensors['$COL_NAME'] is a int32
             tensor with shape [batch_size].
@@ -591,7 +608,7 @@ def train(sess_config,
     '''
                             Incremental_Checkpoint
     Please add `save_incremental_checkpoint_secs` in 'tf.train.MonitoredTrainingSession'
-    it's default to None, Incremental_save checkpoint time in seconds can be set 
+    it's default to None, Incremental_save checkpoint time in seconds can be set
     to use incremental checkpoint function, like `tf.train.MonitoredTrainingSession(
         save_incremental_checkpoint_secs=args.incremental_ckpt)`
     '''
@@ -634,12 +651,12 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
             if (_in != steps):
                 sess.run([model.acc_op, model.auc_op])
                 if (_in % 100 == 0):
-                    print("Evaluation complate:[{}/{}]".format(_in, steps))
+                    print("Evaluation complete:[{}/{}]".format(_in, steps))
             else:
                 eval_acc, eval_auc, events = sess.run(
                     [model.acc_op, model.auc_op, merged])
                 writer.add_summary(events, _in)
-                print("Evaluation complate:[{}/{}]".format(_in, steps))
+                print("Evaluation complete:[{}/{}]".format(_in, steps))
                 print("ACC = {}\nAUC = {}".format(eval_acc, eval_auc))
 
 
@@ -648,11 +665,22 @@ def main(tf_config=None, server=None):
     print("Checking dataset...")
     train_file = args.data_location + '/local_train_splitByUser'
     test_file = args.data_location + '/local_test_splitByUser'
+    if args.parquet_dataset and not args.tf:
+        train_file += '.parquet'
+        test_file += '.parquet'
     if (not os.path.exists(train_file)) or (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_training_examples = sum(1 for line in open(train_file))
-    no_of_test_examples = sum(1 for line in open(test_file))
+
+    no_of_training_examples = 0
+    no_of_test_examples = 0
+    if args.parquet_dataset and not args.tf:
+        import pyarrow.parquet as pq
+        no_of_training_examples = pq.read_table(train_file).num_rows
+        no_of_test_examples = pq.read_table(test_file).num_rows
+    else:
+        no_of_training_examples = sum(1 for line in open(train_file))
+        no_of_test_examples = sum(1 for line in open(test_file))
     print("Numbers of training dataset is {}".format(no_of_training_examples))
     print("Numbers of test dataset is {}".format(no_of_test_examples))
 
@@ -686,8 +714,10 @@ def main(tf_config=None, server=None):
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
     test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                               test_dataset.output_shapes)
+    dataset_output_types = tf.data.get_output_types(train_dataset)
+    dataset_output_shapes = tf.data.get_output_shapes(test_dataset)
+    iterator = tf.data.Iterator.from_structure(dataset_output_types,
+                                               dataset_output_shapes)
     next_element = iterator.get_next()
 
     train_init_op = iterator.make_initializer(train_dataset)
@@ -779,7 +809,7 @@ def get_arg_parser():
     parser.add_argument('--batch_size',
                         help='Batch size to train. Default is 512',
                         type=int,
-                        default=512)
+                        default=2048)
     parser.add_argument('--output_dir',
                         help='Full path to model output directory. \
                             Default to ./result. Covered by --checkpoint. ',
@@ -892,6 +922,14 @@ def get_arg_parser():
                         help='Whether to enable Multi-Hash Variable. Default to False.',
                         type=boolean_string,
                         default=False)#TODO
+    parser.add_argument("--parquet_dataset", \
+                        help='Whether to enable Parquet DataSet. Defualt to True.',
+                        type=boolean_string,
+                        default=True)
+    parser.add_argument("--parquet_dataset_shuffle", \
+                        help='Whether to enable shuffle operation for Parquet Dataset. Default to False.',
+                        type=boolean_string,
+                        default=False)
     return parser
 
 
@@ -955,11 +993,11 @@ def generate_cluster_info(TF_CONFIG):
 # A triple quotes comment is used to introduce these features and play an emphasizing role.
 def set_env_for_DeepRec():
     '''
-    Set some ENV for these DeepRec's features enabled by ENV. 
+    Set some ENV for these DeepRec's features enabled by ENV.
     More Detail information is shown in https://deeprec.readthedocs.io/zh/latest/index.html.
     START_STATISTIC_STEP & STOP_STATISTIC_STEP: On CPU platform, DeepRec supports memory optimization
-        in both stand-alone and distributed trainging. It's default to open, and the 
-        default start and stop steps of collection is 1000 and 1100. Reduce the initial 
+        in both stand-alone and distributed trainging. It's default to open, and the
+        default start and stop steps of collection is 1000 and 1100. Reduce the initial
         cold start time by the following settings.
     MALLOC_CONF: On CPU platform, DeepRec can use memory optimization with the jemalloc library.
         Please preload libjemalloc.so by `LD_PRELOAD=./libjemalloc.so.2 python ...`
@@ -968,7 +1006,6 @@ def set_env_for_DeepRec():
     os.environ['STOP_STATISTIC_STEP'] = '110'
     os.environ['MALLOC_CONF']= \
         'background_thread:true,metadata_thp:auto,dirty_decay_ms:20000,muzzy_decay_ms:20000'
-
 
 if __name__ == '__main__':
     parser = get_arg_parser()

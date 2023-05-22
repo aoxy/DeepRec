@@ -163,6 +163,7 @@ py_library(
         ":weights_broadcast_ops",
         ":while_v2",
         ":work_queue",
+        ":graph_optimizer",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python/compat",
         "//tensorflow/python/compat:v2_compat",
@@ -197,6 +198,19 @@ py_library(
 )
 
 tf_py_build_info_genrule()
+
+py_library(
+    name = "graph_optimizer",
+    srcs = ["graph_optimizer/sample_awared_graph_compression.py",
+           ],
+    srcs_version = "PY2AND3",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":lib",
+        ":pywrap_tensorflow",
+        ":util",
+    ],
+)
 
 py_library(
     name = "platform",
@@ -376,6 +390,7 @@ cc_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
     ],
+    alwayslink = 1,
 )
 
 cc_library(
@@ -412,6 +427,7 @@ cc_library(
         "//third_party/py/numpy:headers",
         "//third_party/python_runtime:headers",
     ],
+    alwayslink = 1,
 )
 
 cc_library(
@@ -618,6 +634,7 @@ cc_library(
         "//tensorflow/core:op_gen_lib",
         "//tensorflow/core:protos_all_cc",
     ],
+    alwayslink = 1,
 )
 
 py_library(
@@ -951,6 +968,7 @@ py_library(
         ":type_spec",
         ":util",
         ":versions",
+        ":group_embedding_types",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python/eager:context",
         "//tensorflow/python/eager:core",
@@ -964,6 +982,16 @@ py_library(
     name = "op_callbacks",
     srcs = ["framework/op_callbacks.py"],
     srcs_version = "PY2AND3",
+)
+
+py_library(
+    name = "group_embedding_types",
+    srcs = ["framework/group_embedding_types.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":pywrap_tensorflow",
+        "//tensorflow/core:protos_all_py",
+    ],
 )
 
 cuda_py_test(
@@ -3484,7 +3512,8 @@ py_library(
 
 py_library(
     name = "kv_variable_ops",
-    srcs = ["ops/kv_variable_ops.py"],
+    srcs = ["ops/kv_variable_ops.py",
+            "ops/group_embedding_lookup_ops.py"],
     srcs_version = "PY2AND3",
     deps = [
         ":array_ops",
@@ -4506,7 +4535,7 @@ cuda_py_test(
         ":nn_grad",
         "//third_party/py/numpy",
     ],
-    shard_count = 16,
+    shard_count = 24,
     tags = ["no_rocm"],
     xla_enable_strict_auto_jit = True,
 )
@@ -4662,7 +4691,6 @@ py_library(
     srcs_version = "PY2AND3",
     deps = [
         ":training_lib",
-        "//tensorflow/contrib/structured_model",
         "//tensorflow/python/training/tracking:base",
         "//tensorflow/python/training/tracking:python_state",
         "//tensorflow/python/training/tracking:util",
@@ -6668,6 +6696,23 @@ cuda_py_test(
     name = "embedding_variable_ops_gpu_test",
     size = "small",
     srcs = ["ops/embedding_variable_ops_gpu_test.py"],
+    tags = ["no_windows"],
+    additional_deps = [
+        ":client_testlib",
+        ":framework_for_generated_wrappers",
+        ":partitioned_variables",
+        ":variable_scope",
+        ":embedding_ops",
+        ":state_ops",
+        "//tensorflow/contrib/layers:layers_py",
+        "//third_party/py/numpy",
+    ],
+)
+
+cuda_py_test(
+    name = "group_embedding_lookup_ops_test",
+    size = "small",
+    srcs = ["ops/group_embedding_lookup_ops_test.py"],
     tags = ["no_windows"],
     additional_deps = [
         ":client_testlib",

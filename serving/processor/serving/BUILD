@@ -27,7 +27,11 @@ tf_cc_shared_object(
     srcs = ["processor.cc",
             "processor.h",],
     deps = [
-            "model_serving"],
+            "model_serving",
+           ] + select({
+               "//conditions:default": [],
+               "//tensorflow:using_cuda_serving":
+                   ["@local_config_cuda//cuda:cudart"]}),
 )
 
 cc_library(
@@ -42,7 +46,7 @@ cc_library(
 cc_library(
     name = "utils",
     srcs = ["util.cc"],
-    hdrs = ["util.h", "custom_thread_pool.h"],
+    hdrs = ["util.h"],
     deps = [
         "model_message",
         "predict_proto_cc",
@@ -104,7 +108,7 @@ cc_library(
 cc_library(
     name = "model_session",
     srcs = ["model_session.cc"],
-    hdrs = ["model_session.h", "custom_thread_pool.h"],
+    hdrs = ["model_session.h"],
     deps = [
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core:framework",
@@ -131,6 +135,23 @@ cc_test(
 )
 
 cc_library(
+    name = "message_coding",
+    srcs = ["message_coding.cc",],
+    hdrs = ["message_coding.h",],
+    deps = [
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:core_cpu",
+        "//tensorflow/core:lib",
+        "//serving/processor/framework:model_version",
+        "//serving/processor/storage:model_store",
+        "model_message",
+        "predict_proto_cc",
+        "utils",
+    ],
+)
+
+cc_library(
     name = "model_instance",
     srcs = ["model_instance.cc",],
     hdrs = ["model_instance.h"],
@@ -144,6 +165,7 @@ cc_library(
         "//serving/processor/framework:graph_optimizer",
         "//serving/processor/framework:model_version",
         "//serving/processor/storage:model_store",
+        ":message_coding",
         "model_config",
         "model_partition",
         "model_session",
@@ -156,10 +178,8 @@ cc_library(
 cc_library(
     name = "model_serving",
     srcs = ["model_serving.cc",
-            "message_coding.cc",
             "model_impl.cc",],
     hdrs = ["model_serving.h",
-            "message_coding.h",
             "model_impl.h",],
     deps = [
         "//tensorflow/core:protos_all_cc",
@@ -168,6 +188,7 @@ cc_library(
         "//tensorflow/core:lib",
         "//serving/processor/framework:model_version",
         "//serving/processor/storage:model_store",
+        ":message_coding",
         "model_config",
         "model_session",
         "model_message",

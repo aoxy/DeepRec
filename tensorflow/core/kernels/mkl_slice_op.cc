@@ -28,6 +28,9 @@ limitations under the License.
 #include "tensorflow/core/platform/prefetch.h"
 #include "tensorflow/core/util/mkl_types.h"
 #include "tensorflow/core/util/mkl_util.h"
+#ifdef DNNL_AARCH64_USE_ACL
+#include "tensorflow/core/platform/mutex.h"
+#endif
 
 using dnnl::stream;
 
@@ -186,6 +189,9 @@ class MklSlicePrimitive : public MklPrimitive {
 
   void Execute(const MklSliceParams& sliceParams,
                std::shared_ptr<stream> slice_stream) {
+#ifdef DNNL_AARCH64_USE_ACL
+    mutex_lock lock(primitive_execution_mu_);
+#endif
 #ifdef ENABLE_DNNL_THREADPOOL
     context_.src_mem->set_data_handle(sliceParams.from->get_data_handle(),
                                       *slice_stream);
@@ -246,6 +252,10 @@ class MklSlicePrimitive : public MklPrimitive {
            *context_.dst_mem }});
     context_.slice_primitives.push_back(*context_.reorder_prim);
   }
+  
+#ifdef DNNL_AARCH64_USE_ACL
+  mutex primitive_execution_mu_;
+#endif
 };
 
 template <typename T>
@@ -454,11 +464,11 @@ class MklSliceOp : public OpKernel {
       // Step 3 - create reorder primitive.
       MklSliceParams sliceParams(&src.GetOpMem(), output.GetUsrMem(),
                                  begin_dims, size_dims);
+      MklDnnThreadPool eigen_tp(context);
       MklSlicePrimitive<T>* reorder_prim =
           MklSlicePrimitiveFactory<T>::Get(sliceParams);
       // Execute slice reorder.
       std::shared_ptr<stream> slice_stream;
-      MklDnnThreadPool eigen_tp(context);
       slice_stream.reset(CreateStream(&eigen_tp, reorder_prim->GetEngine()));
       reorder_prim->Execute(sliceParams, slice_stream);
     } catch (dnnl::error& e) {
