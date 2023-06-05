@@ -6,6 +6,7 @@
 #include <set>
 #include <list>
 #include <limits>
+#include "sparsehash/dense_hash_map_lockless"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/platform/mutex.h"
@@ -128,7 +129,12 @@ template <class K>
 class LRUCache : public BatchCache<K> {
  public:
   LRUCache() {
-    mp.clear();
+    // mp.clear();
+    mp.max_load_factor(0.8);
+    mp.set_empty_key_and_value(
+        LRUCache::EMPTY_KEY_, nullptr);
+    mp.set_counternum(16);
+    mp.set_deleted_key(LRUCache::DELETED_KEY_);
     head = new LRUNode(0);
     tail = new LRUNode(0);
     head->next = tail;
@@ -138,8 +144,8 @@ class LRUCache : public BatchCache<K> {
   }
 
   size_t size() {
-    mutex_lock l(mu_);
-    return mp.size();
+    // mutex_lock l(mu_);
+    return mp.size_lockless();
   }
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
@@ -151,7 +157,8 @@ class LRUCache : public BatchCache<K> {
       evic_ids[i] = evic_node->id;
       rm_node = evic_node;
       evic_node = evic_node->pre;
-      mp.erase(rm_node->id);
+      // mp.erase(rm_node->id);
+      mp.erase_lockless(rm_node->id);
       delete rm_node;
       true_size++;
     }
@@ -178,9 +185,11 @@ class LRUCache : public BatchCache<K> {
     auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
-      typename std::map<K, LRUNode *>::iterator it = mp.find(id);
-      if (it != mp.end()) {
-        LRUNode *node = it->second;
+      // typename std::map<K, LRUNode *>::iterator it = mp.find(id);
+      auto it = mp.find_wait_free(id);
+      // if (it != mp.end()) {
+      if (it.first != LRUCache::EMPTY_KEY_) {
+        LRUNode *node = it.second;
         node->pre->next = node->next;
         node->next->pre = node->pre;
         head->next->pre = node;
@@ -258,10 +267,20 @@ class LRUCache : public BatchCache<K> {
      LRUNode(K id) : id(id), pre(nullptr), next(nullptr) {}
   };
   LRUNode *head, *tail;
-  std::map<K, LRUNode*> mp;
+  // std::map<K, LRUNode*> mp;
+  // LocklessHashMap mp;
+  typedef google::dense_hash_map_lockless<K, LRUNode*> LockLessHashMapLRU;
+  static const int EMPTY_KEY_;
+  static const int DELETED_KEY_;
+  LockLessHashMapLRU mp;
   std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
   mutex mu_;
 };
+
+template <class K>
+const int LRUCache<K>::EMPTY_KEY_ = -1;
+template <class K>
+const int LRUCache<K>::DELETED_KEY_ = -2;
 
 template <class K>
 class LFUCache : public BatchCache<K> {
