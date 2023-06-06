@@ -150,12 +150,8 @@ class LRUCache : public BatchCache<K> {
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
     size_t true_size = 0;
-    for (size_t i = 0; i < k_size; ++i) {
-      if (evict(evic_ids+i)) {
-        true_size++;
-      } else {
-        break;
-      }
+    while (true_size < k_size && evict(evic_ids+true_size)) {
+      ++true_size;
     }
     return true_size;
   }
