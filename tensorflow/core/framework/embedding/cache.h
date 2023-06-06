@@ -145,6 +145,7 @@ class LRUCache : public BatchCache<K> {
 
   size_t size() {
     // mutex_lock l(mu_);
+    // return mp.size();
     return mp.size_lockless();
   }
 
@@ -266,7 +267,7 @@ class LRUCache : public BatchCache<K> {
     } else {
       LRUNode *newNode = new LRUNode(id);
       push_front(newNode);
-      mp[id] = newNode;
+      mp.insert_lockless(std::move(std::pair<K, LRUNode*>(id, newNode)));
       BatchCache<K>::num_miss++;
     }
   }
@@ -280,6 +281,7 @@ class LRUCache : public BatchCache<K> {
     *evic_id = evic_node->id;
     mp.erase_lockless(*evic_id);
     delete evic_node;
+    return true;
   }
 
  private:
