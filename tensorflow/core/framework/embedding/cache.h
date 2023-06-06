@@ -149,21 +149,14 @@ class LRUCache : public BatchCache<K> {
   }
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
-    mutex_lock l(mu_);
     size_t true_size = 0;
-    LRUNode *evic_node = tail->pre;
-    LRUNode *rm_node = evic_node;
-    for (size_t i = 0; i < k_size && evic_node != head; ++i) {
-      evic_ids[i] = evic_node->id;
-      rm_node = evic_node;
-      evic_node = evic_node->pre;
-      // mp.erase(rm_node->id);
-      mp.erase_lockless(rm_node->id);
-      delete rm_node;
-      true_size++;
+    for (size_t i = 0; i < k_size; ++i) {
+      if (evict(evic_ids+i)) {
+        true_size++;
+      } else {
+        break;
+      }
     }
-    evic_node->next = tail;
-    tail->pre = evic_node;
     return true_size;
   }
 
@@ -181,31 +174,8 @@ class LRUCache : public BatchCache<K> {
 
   void add_to_rank(const K* batch_ids, size_t batch_size,
                    bool use_locking=true) {
-    mutex temp_mu;
-    auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
     for (size_t i = 0; i < batch_size; ++i) {
-      K id = batch_ids[i];
-      // typename std::map<K, LRUNode *>::iterator it = mp.find(id);
-      auto it = mp.find_wait_free(id);
-      // if (it != mp.end()) {
-      if (it.first != LRUCache::EMPTY_KEY_) {
-        LRUNode *node = it.second;
-        node->pre->next = node->next;
-        node->next->pre = node->pre;
-        head->next->pre = node;
-        node->next = head->next;
-        head->next = node;
-        node->pre = head;
-        BatchCache<K>::num_hit++;
-      } else {
-        LRUNode *newNode = new LRUNode(id);
-        head->next->pre = newNode;
-        newNode->next = head->next;
-        head->next = newNode;
-        newNode->pre = head;
-        mp[id] = newNode;
-        BatchCache<K>::num_miss++;
-      }
+      add(batch_ids[i]);
     }
   }
 
@@ -266,6 +236,57 @@ class LRUCache : public BatchCache<K> {
      LRUNode *pre, *next;
      LRUNode(K id) : id(id), pre(nullptr), next(nullptr) {}
   };
+
+ private:
+  void push_front(LRUNode *newNode) {
+    mutex_lock l(list_mu_);
+    head->next->pre = newNode;
+    newNode->next = head->next;
+    head->next = newNode;
+    newNode->pre = head;
+  }
+
+  void move_to_front(LRUNode *node) {
+    mutex_lock l(list_mu_);
+    node->pre->next = node->next;
+    node->next->pre = node->pre;
+    head->next->pre = node;
+    node->next = head->next;
+    head->next = node;
+    node->pre = head;
+  }
+
+  void remove_from_list(LRUNode *node) {
+    mutex_lock l(list_mu_);
+    node->pre->next = node->next;
+    node->next->pre = node->pre;
+  }
+
+  void add(K id) {
+    auto it = mp.find_wait_free(id);
+    if (it.first != LRUCache::EMPTY_KEY_) {
+      move_to_front(it.second);
+      BatchCache<K>::num_hit++;
+    } else {
+      LRUNode *newNode = new LRUNode(id);
+      push_front(newNode);
+      mp[id] = newNode;
+      BatchCache<K>::num_miss++;
+    }
+  }
+
+  bool evict(K* evic_id) {
+    LRUNode *evic_node = tail->pre;
+    if(evic_node == head) {
+      return false;
+    }
+    remove_from_list(evic_node);
+    *evic_id = evic_node->id;
+    mp.erase_lockless(*evic_id);
+    delete evic_node;
+  }
+
+ private:
   LRUNode *head, *tail;
   // std::map<K, LRUNode*> mp;
   // LocklessHashMap mp;
@@ -275,6 +296,7 @@ class LRUCache : public BatchCache<K> {
   LockLessHashMapLRU mp;
   std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
   mutex mu_;
+  mutex list_mu_;
 };
 
 template <class K>
