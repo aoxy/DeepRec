@@ -129,12 +129,151 @@ template <class K>
 class LRUCache : public BatchCache<K> {
  public:
   LRUCache() {
+    mp.clear();
+    head = new LRUNode(0);
+    tail = new LRUNode(0);
+    head->next = tail;
+    tail->pre = head;
+    BatchCache<K>::num_hit = 0;
+    BatchCache<K>::num_miss = 0;
+  }
+
+  size_t size() {
+    mutex_lock l(mu_);
+    return mp.size();
+  }
+
+  size_t get_evic_ids(K* evic_ids, size_t k_size) {
+    mutex_lock l(mu_);
+    size_t true_size = 0;
+    LRUNode *evic_node = tail->pre;
+    LRUNode *rm_node = evic_node;
+    for (size_t i = 0; i < k_size && evic_node != head; ++i) {
+      evic_ids[i] = evic_node->id;
+      rm_node = evic_node;
+      evic_node = evic_node->pre;
+      mp.erase(rm_node->id);
+      delete rm_node;
+      true_size++;
+    }
+    evic_node->next = tail;
+    tail->pre = evic_node;
+    return true_size;
+  }
+
+  size_t get_cached_ids(K* cached_ids, size_t k_size,
+                        int64* cached_versions,
+                        int64* cached_freqs) override {
+    mutex_lock l(mu_);
+    LRUNode* it = head->next;
+    size_t i;
+    for (i = 0; i < k_size && it != tail; i++, it = it->next) {
+      cached_ids[i] = it->id;
+    }
+    return i;
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                   bool use_locking=true) {
+    mutex temp_mu;
+    auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      typename std::map<K, LRUNode *>::iterator it = mp.find(id);
+      if (it != mp.end()) {
+        LRUNode *node = it->second;
+        node->pre->next = node->next;
+        node->next->pre = node->pre;
+        head->next->pre = node;
+        node->next = head->next;
+        head->next = node;
+        node->pre = head;
+        BatchCache<K>::num_hit++;
+      } else {
+        LRUNode *newNode = new LRUNode(id);
+        head->next->pre = newNode;
+        newNode->next = head->next;
+        head->next = newNode;
+        newNode->pre = head;
+        mp[id] = newNode;
+        BatchCache<K>::num_miss++;
+      }
+    }
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                    const int64* batch_version,
+                    const int64* batch_freqs,
+                    bool use_locking = true) {
+    //TODO: add to rank accroding to the version of ids
+    add_to_rank(batch_ids, batch_size);
+  }
+
+  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) {
+    mutex_lock l(mu_);
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      auto it_prefetch = prefetch_id_table.find(id);
+      if (it_prefetch == prefetch_id_table.end()) {
+        auto it_cache = mp.find(id);
+        if (it_cache != mp.end()) {
+          LRUNode *node = it_cache->second;
+          node->pre->next = node->next;
+          node->next->pre = node->pre;
+          delete node;
+          mp.erase(id);
+        }
+        prefetch_id_table[id] = new PrefetchNode<K>(id);
+      } else {
+        it_prefetch->second->Ref();
+      }
+    }
+  }
+
+  void add_to_cache(const K* batch_ids, const size_t batch_size) {
+    mutex_lock l(mu_);
+    std::vector<K> ids_to_cache(batch_size);
+    int64 nums_to_cache = 0;
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      auto it_prefetch = prefetch_id_table.find(id);
+      if (it_prefetch == prefetch_id_table.end()) {
+        LOG(FATAL)<<"The id should be prefetched before being used.";
+      }
+      it_prefetch->second->UnRef();
+      if (it_prefetch->second->ref_count() == 0) {
+        delete it_prefetch->second;
+        prefetch_id_table.erase(id);
+        ids_to_cache[nums_to_cache] = id;
+        nums_to_cache++;
+      }
+    }
+    add_to_rank(ids_to_cache.data(), nums_to_cache, false);
+  }
+
+ private:
+  class LRUNode {
+   public:
+     K id;
+     LRUNode *pre, *next;
+     LRUNode(K id) : id(id), pre(nullptr), next(nullptr) {}
+  };
+  LRUNode *head, *tail;
+  std::map<K, LRUNode*> mp;
+  std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
+  mutex mu_;
+};
+
+template <class K>
+class NewLRUCache : public BatchCache<K> {
+ public:
+  NewLRUCache() {
     // mp.clear();
     mp.max_load_factor(0.8);
     mp.set_empty_key_and_value(
-        LRUCache::EMPTY_KEY_, nullptr);
+        NewLRUCache::EMPTY_KEY_, nullptr);
     mp.set_counternum(16);
-    mp.set_deleted_key(LRUCache::DELETED_KEY_);
+    mp.set_deleted_key(NewLRUCache::DELETED_KEY_);
     head = new LRUNode(0);
     tail = new LRUNode(0);
     head->next = tail;
@@ -261,7 +400,7 @@ class LRUCache : public BatchCache<K> {
 
   void add(K id) {
     auto it = mp.find_wait_free(id);
-    if (it.first != LRUCache::EMPTY_KEY_) {
+    if (it.first != NewLRUCache::EMPTY_KEY_) {
       move_to_front(it.second);
       BatchCache<K>::num_hit++;
     } else {
@@ -298,9 +437,9 @@ class LRUCache : public BatchCache<K> {
 };
 
 template <class K>
-const int LRUCache<K>::EMPTY_KEY_ = -1;
+const int NewLRUCache<K>::EMPTY_KEY_ = -1;
 template <class K>
-const int LRUCache<K>::DELETED_KEY_ = -2;
+const int NewLRUCache<K>::DELETED_KEY_ = -2;
 
 template <class K>
 class LFUCache : public BatchCache<K> {
