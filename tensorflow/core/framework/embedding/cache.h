@@ -423,13 +423,15 @@ class NewLRUCache : public BatchCache<K> {
     return true;
   }
 
+ public:
+  static const int EMPTY_KEY_;
+  static const int DELETED_KEY_;
+
  private:
   LRUNode *head, *tail;
   // std::map<K, LRUNode*> mp;
   // LocklessHashMap mp;
   typedef google::dense_hash_map_lockless<K, LRUNode*> LockLessHashMapLRU;
-  static const int EMPTY_KEY_;
-  static const int DELETED_KEY_;
   LockLessHashMapLRU mp;
   std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
   mutex mu_;
@@ -440,6 +442,144 @@ template <class K>
 const int NewLRUCache<K>::EMPTY_KEY_ = -1;
 template <class K>
 const int NewLRUCache<K>::DELETED_KEY_ = -2;
+
+template <class K>
+class SubListLRUCache : public BatchCache<K> {
+ public:
+  SubListLRUCache() {
+    mp.max_load_factor(0.8);
+    mp.set_empty_key_and_value(
+        NewLRUCache<K>::EMPTY_KEY_, nullptr);
+    mp.set_counternum(16);
+    mp.set_deleted_key(NewLRUCache<K>::DELETED_KEY_);
+    head = new LRUNode(0);
+    tail = new LRUNode(0);
+    head->next = tail;
+    tail->pre = head;
+    list_len = 0;
+    BatchCache<K>::num_hit = 0;
+    BatchCache<K>::num_miss = 0;
+  }
+
+  size_t size() {
+    return mp.size_lockless();
+  }
+
+  size_t get_evic_ids(K* evic_ids, size_t k_size) {
+    size_t true_size = 0;
+    while (list_len > 3 && true_size < k_size && evict(evic_ids+true_size)) {
+      ++true_size;
+    }
+    return true_size;
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                   bool use_locking=true) {
+    // TODO: if(batch_size < 2) {}
+    LRUNode *a = new LRUNode(batch_ids[0]);
+    add(batch_ids[0], a);
+    LRUNode *b = a;
+    for (size_t i = 1; i < batch_size; ++i) {
+      b->next = new LRUNode(batch_ids[i], b);
+      b = b->next;
+      add(batch_ids[i], b);
+    }
+    push_front(a, b);
+    __sync_fetch_and_add(&list_len, batch_size);
+  }
+
+  size_t get_cached_ids(K* cached_ids, size_t k_size,
+                        int64* cached_versions,
+                        int64* cached_freqs) override { }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                    const int64* batch_version,
+                    const int64* batch_freqs,
+                    bool use_locking = true) { }
+
+  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) { }
+
+  void add_to_cache(const K* batch_ids, const size_t batch_size) { }
+
+ private:
+  class LRUNode {
+   public:
+     K id;
+     LRUNode *pre, *next;
+     LRUNode(K id) : id(id), pre(nullptr), next(nullptr) {}
+     LRUNode(K id, LRUNode *pre) : id(id), pre(pre), next(nullptr) {}
+  };
+
+ private:
+  void push_front(LRUNode *newNode) {
+    mutex_lock l(list_mu_);
+    head->next->pre = newNode;
+    newNode->next = head->next;
+    head->next = newNode;
+    newNode->pre = head;
+  }
+
+  void push_front(LRUNode *a, LRUNode *b) {
+    mutex_lock l(list_mu_);
+    head->next->pre = b;
+    b->next = head->next;
+    head->next = a;
+    a->pre = head;
+  }
+
+  void move_to_front(LRUNode *node) {
+    mutex_lock l(list_mu_);
+    node->pre->next = node->next;
+    node->next->pre = node->pre;
+    head->next->pre = node;
+    node->next = head->next;
+    head->next = node;
+    node->pre = head;
+  }
+
+  void remove_from_list(LRUNode *node) {
+    // mutex_lock l(list_mu_);
+    node->pre->next = node->next;
+    node->next->pre = node->pre;
+  }
+
+  void add(K id, LRUNode *newNode) {
+    auto it = mp.find_wait_free(id);
+    if (it.first != NewLRUCache<K>::EMPTY_KEY_) {
+      BatchCache<K>::num_hit++;
+    } else {
+      BatchCache<K>::num_miss++;
+    }
+    mp.insert_lockless(std::move(std::pair<K, LRUNode*>(id, newNode)));
+  }
+
+  bool evict(K* evic_id) {
+    LRUNode *evic_node = tail->pre;
+    if(evic_node == head) {
+      return false;
+    }
+    remove_from_list(evic_node);
+    __sync_fetch_and_sub(&list_len, 1);
+    *evic_id = evic_node->id;
+    auto it = mp.find_wait_free(*evic_id);
+    if (it.first != NewLRUCache<K>::EMPTY_KEY_) {
+      if (it.second == evic_node) {
+        mp.erase_lockless(*evic_id);
+      } 
+    }
+    delete evic_node;
+    return true;
+  }
+
+ private:
+  LRUNode *head, *tail;
+  size_t list_len;
+  typedef google::dense_hash_map_lockless<K, LRUNode*> LockLessHashMapLRU;
+  LockLessHashMapLRU mp;
+  std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
+  mutex mu_;
+  mutex list_mu_;
+};
 
 template <class K>
 class LFUCache : public BatchCache<K> {

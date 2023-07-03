@@ -1833,6 +1833,7 @@ void SimpleCalculation() {
 
 void to_array(int64 *ids, size_t ids_idx, int64 *batch_ids, size_t batch_size)
 {
+  // SimpleCalculation(); // 513143 ms
   for (size_t i = 0; i < batch_size; ++i)
     batch_ids[i] = ids[i + ids_idx];
 }
@@ -1999,17 +2000,28 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   uint64 start = Env::Default()->NowNanos();
   // random_shuffle(ids.begin(), ids.end());
   // BatchCache<int64>* cache = new NewLRUCache<int64>();
-  BatchCache<int64>* cache = new LRUCache<int64>();
+  // BatchCache<int64>* cache = new LRUCache<int64>();
+  BatchCache<int64>* cache = new SubListLRUCache<int64>();
 
-  // NewLRUCache: (5  thread,1605 ms,1502 ms,1471 ms,1377 ms)
   // NewLRUCache: (2  thread,456 ms,458 ms,457 ms,456 ms)
+  // NewLRUCache: (5  thread,1605 ms,1502 ms,1471 ms,1377 ms)
   // NewLRUCache: (10 thread,1652 ms,1766 ms,2009 ms,1682 ms)
   // NewLRUCache: (16 thread,1984 ms,1857 ms)
 
-  // LRUCache: (5  thread,888 ms,934 ms,982 ms,886 ms)
   // LRUCache: (2  thread,581 ms,580 ms,582 ms,616 ms)
+  // LRUCache: (5  thread,888 ms,934 ms,982 ms,886 ms)
   // LRUCache: (10 thread,1143 ms,1175 ms,1267 ms,1315 ms)
-  // LRUCache: (16 thread,1656 ms,1337 ms,1625 ms,1559 ms)
+  // LRUCache: (16 thread,1656 ms,1337 ms,1625 ms,1559 ms) 99.804 %, 99.8122 %
+
+  // SubListLRUCache: (2  thread,1012 ms,1008 ms,1007 ms,1007 ms) 99.9 %
+  // SubListLRUCache: (5  thread,1011 ms,877 ms,1234 ms,1242 ms) 99.7976837 %, 99.7518311 %
+  // SubListLRUCache: (10 thread,1107 ms,1050 ms,1044 ms,1167 ms) 99.5671082 %, 99.5787277 %
+  // SubListLRUCache: (16 thread,1196 ms,1159 ms,1167 ms,1201 ms) 99.2142487 %
+
+  // SubListLRUCache2: (2  thread,979 ms,982 ms)
+  // SubListLRUCache2: (5  thread,976 ms,520 ms,517 ms,972 ms)
+  // SubListLRUCache2: (10 thread,684 ms,685 ms,7815 ms,8012 ms)
+  // SubListLRUCache2: (16 thread,736 ms,740 ms,737 ms,5464 ms)
   int thread_num = 16;
   std::vector<std::vector<int64>> workers_ids(thread_num);
   for (size_t i = 0; i < ids.size(); ++i)
