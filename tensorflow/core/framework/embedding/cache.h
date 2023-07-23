@@ -623,11 +623,11 @@ class BlockLockLFUCache : public BatchCache<K> {
         if (id == (*cache_[block_idx]).cache_block[j].id) {
           found = true;
           (*cache_[block_idx]).cache_block[j].count++;
-          BatchCache<K>::num_hit++;
+          __sync_fetch_and_add(&this->num_hit, 1);
         }
       }
       if (!found) {
-        BatchCache<K>::num_miss++;
+        __sync_fetch_and_add(&this->num_miss, 1);
         insert = false;
         size_t min_j = 0;
         size_t min_count = (*cache_[block_idx]).cache_block[min_j].count;

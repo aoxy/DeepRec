@@ -1837,7 +1837,7 @@ void to_array(int64* ids, size_t ids_idx, int64* batch_ids, size_t batch_size) {
 
 void InsertCache(BatchCache<int64>* cache, std::vector<int64>* ids,
                  size_t batch_size) {
-  LOG(INFO) << "InsertCache ID Size " << ids->size();
+  // LOG(INFO) << "InsertCache ID Size " << ids->size();
   int64* batch_ids = new int64[batch_size];
   size_t ids_idx = 0;
   for (size_t e = 0; e < 2; ++e) {
@@ -1863,11 +1863,11 @@ void InsertCache(BatchCache<int64>* cache, std::vector<int64>* ids,
 
 void RemoveCache(BatchCache<int64>* cache, size_t capacity, size_t k_size) {
   int64* evic_ids = new int64[k_size];
-  size_t curr_size = 0;
+  size_t curr_size = -1;
   size_t prev_size1 = 0;
   size_t prev_size2 = 0;
   size_t prev_size3 = 0;
-  size_t prev_size4 = -1;
+  size_t prev_size4 = 0;
   size_t max_size = 0;
   while (true) {
     prev_size4 = prev_size3;
@@ -1920,6 +1920,56 @@ class dataloder {
   size_t usize() { return s.size(); }
 };
 
+void TestCacheOnTaoBao(dataloder* dl, BatchCache<int64>* cache,
+                       size_t thread_num, size_t batch_size, size_t capacity) {
+  uint64 start = Env::Default()->NowNanos();
+  std::vector<std::vector<int64>> workers_ids(thread_num);
+  for (size_t i = 0; i < dl->ids.size(); ++i) {
+    workers_ids[i % (thread_num - 1)].push_back(dl->ids[i]);
+  }
+  std::vector<std::thread> insert_threads(thread_num);
+  for (size_t i = 0; i < thread_num - 1; i++) {
+    insert_threads[i] =
+        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+  }
+  insert_threads[thread_num - 1] =
+      std::thread(RemoveCache, cache, capacity, batch_size * (thread_num - 1));
+  for (auto& t : insert_threads) {
+    t.join();
+  }
+  uint64 end = Env::Default()->NowNanos();
+  uint64 result_cost = end - start;
+  LOG(INFO) << typeid(*cache).name() << " Cost Time: " << result_cost / 1000000
+            << " ms";
+  LOG(INFO) << cache->DebugString();
+}
+
+TEST(EmbeddingVariableTest, TestCacheTaoBaoBatch) {
+  size_t num_ids = 10000000;
+  size_t capacity = 0;
+  size_t batch_size = 128;
+  std::vector<size_t> thread_nums = {2, 5, 10, 16};
+  dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, num_ids);
+  LOG(INFO) << "Taobao dataset loaded!";
+  capacity = (size_t)(0.3 * dl.usize());
+  LOG(INFO) << "Cache Capacity = " << capacity;
+
+  for (size_t i = 0; i < thread_nums.size(); i++) {
+    LOG(INFO) << "thread_num = " << thread_nums[i];
+    BatchCache<int64>* cache1 = new LRUCache<int64>();
+    // BatchCache<int64>* cache2 = new NewLRUCache<int64>();
+    BatchCache<int64>* cache3 = new BlockLockLFUCache<int64>(capacity, 8);
+    BatchCache<int64>* cache4 = new BlockLockLFUCache<int64>(capacity, 16);
+    BatchCache<int64>* cache5 = new BlockLockLFUCache<int64>(capacity, 32);
+
+    TestCacheOnTaoBao(&dl, cache1, thread_nums[i], batch_size, capacity);
+    // TestCacheOnTaoBao(&dl, cache2, thread_nums[i], batch_size, capacity);
+    TestCacheOnTaoBao(&dl, cache3, thread_nums[i], batch_size, capacity);
+    TestCacheOnTaoBao(&dl, cache4, thread_nums[i], batch_size, capacity);
+    TestCacheOnTaoBao(&dl, cache5, thread_nums[i], batch_size, capacity);
+  }
+}
+
 TEST(EmbeddingVariableTest, TestLookupConcurrencyCacheTaoBao) {
   const int N = 10000000;
   const int capacity = 10000;
@@ -1928,20 +1978,21 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCacheTaoBao) {
 
   uint64 start = Env::Default()->NowNanos();
 
-  BatchCache<int64>* cache = new LRUCache<int64>();
+  // BatchCache<int64>* cache = new LRUCache<int64>();
   // BatchCache<int64>* cache = new NewLRUCache<int64>();
-  // BatchCache<int64>* cache = new BlockLockLFUCache<int64>(capacity, 16);
+  BatchCache<int64>* cache = new BlockLockLFUCache<int64>(capacity, 16);
 
   // LRUCache: (5  thread,)
   // LRUCache: (2  thread,)
   // LRUCache: (10 thread,)
-  // LRUCache: (16 thread,)
+  // LRUCache: (16 thread) (57444 ms, 974840, 89.3876 %) (58165 ms, 971496, 89.3476715 %)
 
   // NewLRUCache: (5  thread,)
   // NewLRUCache: (2  thread,)
   // NewLRUCache: (10 thread,)
-  // NewLRUCache: (16 thread,)
+  // NewLRUCache: (16 thread) (53960 ms, 1003787, 89.7137833 %) (53846 ms, 1004373, 89.7318726 %)
 
+  // BlockLockLFUCache 16: (16 thread) (893 ms, 10000, 37.9969826 %) (53846 ms, 1004373, 89.7318726 %)
   int thread_num = 16;
   std::vector<std::vector<int64>> workers_ids(thread_num);
   for (size_t i = 0; i < dl.ids.size(); ++i) {
