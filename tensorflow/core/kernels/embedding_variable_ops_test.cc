@@ -1839,8 +1839,8 @@ void InsertCache(BatchCache<int64>* cache, std::vector<int64>* ids,
                  size_t batch_size) {
   // LOG(INFO) << "InsertCache ID Size " << ids->size();
   int64* batch_ids = new int64[batch_size];
-  size_t ids_idx = 0;
-  for (size_t e = 0; e < 2; ++e) {
+  for (size_t e = 0; e < 1; ++e) {
+    size_t ids_idx = 0;
     size_t remain_size = ids->size() - ids_idx;
     size_t total_size = remain_size;
 
@@ -1957,13 +1957,13 @@ TEST(EmbeddingVariableTest, TestCacheTaoBaoBatch) {
   for (size_t i = 0; i < thread_nums.size(); i++) {
     LOG(INFO) << "thread_num = " << thread_nums[i];
     BatchCache<int64>* cache1 = new LRUCache<int64>();
-    // BatchCache<int64>* cache2 = new NewLRUCache<int64>();
+    BatchCache<int64>* cache2 = new NewLRUCache<int64>();
     BatchCache<int64>* cache3 = new BlockLockLFUCache<int64>(capacity, 8);
     BatchCache<int64>* cache4 = new BlockLockLFUCache<int64>(capacity, 16);
     BatchCache<int64>* cache5 = new BlockLockLFUCache<int64>(capacity, 32);
 
     TestCacheOnTaoBao(&dl, cache1, thread_nums[i], batch_size, capacity);
-    // TestCacheOnTaoBao(&dl, cache2, thread_nums[i], batch_size, capacity);
+    TestCacheOnTaoBao(&dl, cache2, thread_nums[i], batch_size, capacity);
     TestCacheOnTaoBao(&dl, cache3, thread_nums[i], batch_size, capacity);
     TestCacheOnTaoBao(&dl, cache4, thread_nums[i], batch_size, capacity);
     TestCacheOnTaoBao(&dl, cache5, thread_nums[i], batch_size, capacity);

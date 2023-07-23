@@ -268,7 +268,6 @@ template <class K>
 class NewLRUCache : public BatchCache<K> {
  public:
   NewLRUCache() {
-    // mp.clear();
     mp.max_load_factor(0.8);
     mp.set_empty_key_and_value(
         NewLRUCache::EMPTY_KEY_, nullptr);
@@ -283,8 +282,6 @@ class NewLRUCache : public BatchCache<K> {
   }
 
   size_t size() {
-    // mutex_lock l(mu_);
-    // return mp.size();
     return mp.size_lockless();
   }
 
@@ -296,18 +293,6 @@ class NewLRUCache : public BatchCache<K> {
     return true_size;
   }
 
-  size_t get_cached_ids(K* cached_ids, size_t k_size,
-                        int64* cached_versions,
-                        int64* cached_freqs) override {
-    mutex_lock l(mu_);
-    LRUNode* it = head->next;
-    size_t i;
-    for (i = 0; i < k_size && it != tail; i++, it = it->next) {
-      cached_ids[i] = it->id;
-    }
-    return i;
-  }
-
   void add_to_rank(const K* batch_ids, size_t batch_size,
                    bool use_locking=true) {
     for (size_t i = 0; i < batch_size; ++i) {
@@ -315,55 +300,18 @@ class NewLRUCache : public BatchCache<K> {
     }
   }
 
+  size_t get_cached_ids(K* cached_ids, size_t k_size,
+                        int64* cached_versions,
+                        int64* cached_freqs) override { }
+
   void add_to_rank(const K* batch_ids, size_t batch_size,
                     const int64* batch_version,
                     const int64* batch_freqs,
-                    bool use_locking = true) {
-    //TODO: add to rank accroding to the version of ids
-    add_to_rank(batch_ids, batch_size);
-  }
+                    bool use_locking = true) { }
 
-  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) {
-    mutex_lock l(mu_);
-    for (size_t i = 0; i < batch_size; ++i) {
-      K id = batch_ids[i];
-      auto it_prefetch = prefetch_id_table.find(id);
-      if (it_prefetch == prefetch_id_table.end()) {
-        auto it_cache = mp.find(id);
-        if (it_cache != mp.end()) {
-          LRUNode *node = it_cache->second;
-          node->pre->next = node->next;
-          node->next->pre = node->pre;
-          delete node;
-          mp.erase(id);
-        }
-        prefetch_id_table[id] = new PrefetchNode<K>(id);
-      } else {
-        it_prefetch->second->Ref();
-      }
-    }
-  }
+  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) { }
 
-  void add_to_cache(const K* batch_ids, const size_t batch_size) {
-    mutex_lock l(mu_);
-    std::vector<K> ids_to_cache(batch_size);
-    int64 nums_to_cache = 0;
-    for (size_t i = 0; i < batch_size; ++i) {
-      K id = batch_ids[i];
-      auto it_prefetch = prefetch_id_table.find(id);
-      if (it_prefetch == prefetch_id_table.end()) {
-        LOG(FATAL)<<"The id should be prefetched before being used.";
-      }
-      it_prefetch->second->UnRef();
-      if (it_prefetch->second->ref_count() == 0) {
-        delete it_prefetch->second;
-        prefetch_id_table.erase(id);
-        ids_to_cache[nums_to_cache] = id;
-        nums_to_cache++;
-      }
-    }
-    add_to_rank(ids_to_cache.data(), nums_to_cache, false);
-  }
+  void add_to_cache(const K* batch_ids, const size_t batch_size) { }
 
  private:
   class LRUNode {
@@ -402,12 +350,12 @@ class NewLRUCache : public BatchCache<K> {
     auto it = mp.find_wait_free(id);
     if (it.first != NewLRUCache::EMPTY_KEY_) {
       move_to_front(it.second);
-      BatchCache<K>::num_hit++;
+      __sync_fetch_and_add(&this->num_hit, 1);
     } else {
       LRUNode *newNode = new LRUNode(id);
       push_front(newNode);
       mp.insert_lockless(std::move(std::pair<K, LRUNode*>(id, newNode)));
-      BatchCache<K>::num_miss++;
+      __sync_fetch_and_add(&this->num_miss, 1);
     }
   }
 
@@ -433,7 +381,6 @@ class NewLRUCache : public BatchCache<K> {
   // LocklessHashMap mp;
   typedef google::dense_hash_map_lockless<K, LRUNode*> LockLessHashMapLRU;
   LockLessHashMapLRU mp;
-  std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
   mutex mu_;
   mutex list_mu_;
 };
@@ -584,7 +531,7 @@ class SubListLRUCache : public BatchCache<K> {
 template <class K>
 class BlockLockLFUCache : public BatchCache<K> {
  public:
-  BlockLockLFUCache(size_t capacity = 10000, size_t way = 16)
+  BlockLockLFUCache(size_t capacity, size_t way)
       : evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
     block_count_ = capacity_ / way_;
     for (size_t i = 0; i < block_count_; i++) {
