@@ -1818,44 +1818,39 @@ void SimpleCalculation() {
   /* 100ms CPU task */
   const int64 N = 6600000;
   int64 counter = 0;
-  double sum1=0;
-  double sum2=0;
-  for (size_t i = 0; i < N; ++i)
-  {
-      counter += 1;
-      sum1 += sqrt(counter);
-      sum2 += sqrt(sum1);
+  double sum1 = 0;
+  double sum2 = 0;
+  for (size_t i = 0; i < N; ++i) {
+    counter += 1;
+    sum1 += sqrt(counter);
+    sum2 += sqrt(sum1);
   }
   ASSERT_EQ(counter, N);
-  ASSERT_EQ(sum1>0, true);
-  ASSERT_EQ(sum2>0, true);
+  ASSERT_EQ(sum1 > 0, true);
+  ASSERT_EQ(sum2 > 0, true);
 }
 
-void to_array(int64 *ids, size_t ids_idx, int64 *batch_ids, size_t batch_size)
-{
+void to_array(int64* ids, size_t ids_idx, int64* batch_ids, size_t batch_size) {
   // SimpleCalculation(); // 513143 ms
-  for (size_t i = 0; i < batch_size; ++i)
-    batch_ids[i] = ids[i + ids_idx];
+  for (size_t i = 0; i < batch_size; ++i) batch_ids[i] = ids[i + ids_idx];
 }
 
-void InsertCache(BatchCache<int64>* cache, std::vector<int64> *ids, size_t batch_size) {
-  LOG(INFO)<<"InsertCache ID Size " << ids->size();
-  int64 *batch_ids = new int64[batch_size];
+void InsertCache(BatchCache<int64>* cache, std::vector<int64>* ids,
+                 size_t batch_size) {
+  LOG(INFO) << "InsertCache ID Size " << ids->size();
+  int64* batch_ids = new int64[batch_size];
   size_t ids_idx = 0;
-  for (size_t e = 0; e < 2; ++e)
-  {
+  for (size_t e = 0; e < 2; ++e) {
     size_t remain_size = ids->size() - ids_idx;
     size_t total_size = remain_size;
 
-    while (remain_size > batch_size)
-    {
+    while (remain_size > batch_size) {
       to_array(ids->data(), ids_idx, batch_ids, batch_size);
       ids_idx += batch_size;
       cache->add_to_rank(batch_ids, batch_size);
       remain_size -= batch_size;
     }
-    if (remain_size > 0)
-    {
+    if (remain_size > 0) {
       to_array(ids->data(), ids_idx, batch_ids, remain_size);
       ids_idx += remain_size;
       cache->add_to_rank(batch_ids, remain_size);
@@ -1867,102 +1862,99 @@ void InsertCache(BatchCache<int64>* cache, std::vector<int64> *ids, size_t batch
 }
 
 void RemoveCache(BatchCache<int64>* cache, size_t capacity, size_t k_size) {
-  int64 *evic_ids = new int64[k_size];
+  int64* evic_ids = new int64[k_size];
   size_t curr_size = 0;
   size_t prev_size1 = 0;
   size_t prev_size2 = 0;
   size_t prev_size3 = 0;
   size_t prev_size4 = -1;
-  size_t count = 3;
-  while(1) {
+  size_t max_size = 0;
+  while (true) {
     prev_size4 = prev_size3;
     prev_size3 = prev_size2;
     prev_size2 = prev_size1;
     prev_size1 = curr_size;
     curr_size = cache->size();
-    if(curr_size==prev_size1 && prev_size1==prev_size2 && prev_size2==prev_size3 && prev_size3==prev_size4) {
+    max_size = std::max(max_size, curr_size);
+    if (curr_size == prev_size1 && prev_size1 == prev_size2 &&
+        prev_size2 == prev_size3 && prev_size3 == prev_size4) {
       break;
     }
     // LOG(INFO)<<"RemoveCache Current Size " << curr_size;
     if (curr_size > capacity) {
       cache->get_evic_ids(evic_ids, k_size);
     }
-    usleep(100000);/* 100ms */
+    usleep(100000); /* 100ms */
   }
   delete[] evic_ids;
-  // LOG(INFO)<<"RemoveCache thread finish";
+  LOG(INFO) << "RemoveCache thread finish -> " << curr_size << " -> " << max_size;
 }
 
-class dataloder
-{
-private:
-    std::set<int64> s;
+class dataloder {
+ private:
+  std::set<int64> s;
 
-public:
-    std::vector<int64> ids;
-    dataloder(std::string filepath, size_t feature_id, size_t max_id_num = 0)
-    {
-        std::ifstream fp(filepath); // 定义声明一个ifstream对象，指定文件路径
-        if (!fp)
-        {
-            LOG(INFO) << "open" << filepath << "fail." << std::endl
-                    << std::flush;
-            exit(1);
-        }
-        std::string line;
-        std::getline(fp, line); // 跳过列名，第一行不做处理
-        // std::cout << line;
-        while (std::getline(fp, line))
-        {
-            std::string number;
-            std::istringstream readstr(line);
-            for (size_t j = 0; j <= feature_id; ++j)
-            {
-              std::getline(readstr, number, ',');
-            }
-            int64 id = std::atoi(number.c_str());
-            s.insert(id);
-            ids.push_back(id);
-            if (max_id_num > 0 && ids.size() >= max_id_num)
-                break;
-        }
+ public:
+  std::vector<int64> ids;
+  dataloder(std::string filepath, size_t feature_id, size_t max_id_num = 0) {
+    std::ifstream fp(filepath);
+    if (!fp) {
+      LOG(INFO) << "open" << filepath << "fail." << std::endl << std::flush;
+      exit(1);
     }
-    size_t size() { return ids.size(); }
-    size_t usize() { return s.size(); }
+    std::string line;
+    std::getline(fp, line);
+    while (std::getline(fp, line)) {
+      std::string number;
+      std::istringstream readstr(line);
+      for (size_t j = 0; j <= feature_id; ++j) {
+        std::getline(readstr, number, ',');
+      }
+      int64 id = std::atoi(number.c_str());
+      s.insert(id);
+      ids.push_back(id);
+      if (max_id_num > 0 && ids.size() >= max_id_num) break;
+    }
+  }
+  size_t size() { return ids.size(); }
+  size_t usize() { return s.size(); }
 };
 
 TEST(EmbeddingVariableTest, TestLookupConcurrencyCacheTaoBao) {
   const int N = 10000000;
-  const int uniqueN = 10000;
-  const int capacity = 1000;
+  const int capacity = 10000;
   size_t batch_size = 128;
-  dataloder dl("/home/code/aoxy/DeepRec/raw_sample.csv", 0, N);
-  
+  dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, N);
+
   uint64 start = Env::Default()->NowNanos();
-  // BatchCache<int64>* cache = new NewLRUCache<int64>();
+
   BatchCache<int64>* cache = new LRUCache<int64>();
+  // BatchCache<int64>* cache = new NewLRUCache<int64>();
+  // BatchCache<int64>* cache = new BlockLockLFUCache<int64>(capacity, 16);
+
+  // LRUCache: (5  thread,)
+  // LRUCache: (2  thread,)
+  // LRUCache: (10 thread,)
+  // LRUCache: (16 thread,)
 
   // NewLRUCache: (5  thread,)
   // NewLRUCache: (2  thread,)
   // NewLRUCache: (10 thread,)
   // NewLRUCache: (16 thread,)
 
-  // LRUCache: (5  thread,)
-  // LRUCache: (2  thread,)
-  // LRUCache: (10 thread,)
-  // LRUCache: (16 thread,)
   int thread_num = 16;
   std::vector<std::vector<int64>> workers_ids(thread_num);
-  for (size_t i = 0; i < dl.ids.size(); ++i)
-  {
-      workers_ids[i % (thread_num - 1)].push_back(dl.ids[i]);
+  for (size_t i = 0; i < dl.ids.size(); ++i) {
+    workers_ids[i % (thread_num - 1)].push_back(dl.ids[i]);
   }
   std::vector<std::thread> insert_threads(thread_num);
-  for (size_t i = 0 ; i < thread_num - 1; i++) {
-    insert_threads[i] = std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+  for (size_t i = 0; i < thread_num - 1; i++) {
+    insert_threads[i] =
+        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
   }
-  insert_threads[thread_num - 1] = std::thread(RemoveCache, cache, capacity, batch_size*(thread_num-1));
-  for (auto &t : insert_threads) {
+  insert_threads[thread_num - 1] =
+      std::thread(RemoveCache, cache, capacity, batch_size * (thread_num - 1));
+  for (auto& t : insert_threads) {
     t.join();
   }
   uint64 end = Env::Default()->NowNanos();
@@ -1979,29 +1971,26 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   int freq_list[] = {30, 20, 18, 15, 12, 8, 5, 3, 2, 1, 2, 1, 1};
   std::vector<int64> ids(N);
   std::vector<int64> uids(uniqueN);
-  for (int i = 0; i < uniqueN; i++)
-  {
+  for (int i = 0; i < uniqueN; i++) {
     uids[i] = i + 321;
   }
   int i = 0;
   int u = 0;
-  while (i < N)
-  {
+  while (i < N) {
     int id = uids[u];
     int freq = freq_list[u % 13];
-    while (freq-- > 0 && i < N)
-    {
+    while (freq-- > 0 && i < N) {
       ids[i++] = id;
     }
     u = (u + 1) % uniqueN;
   }
 
-  
   uint64 start = Env::Default()->NowNanos();
   // random_shuffle(ids.begin(), ids.end());
   // BatchCache<int64>* cache = new NewLRUCache<int64>();
   // BatchCache<int64>* cache = new LRUCache<int64>();
-  BatchCache<int64>* cache = new SubListLRUCache<int64>();
+  // BatchCache<int64>* cache = new SubListLRUCache<int64>();
+  BatchCache<int64>* cache = new BlockLockLFUCache<int64>(capacity, 16);
 
   // NewLRUCache: (2  thread,456 ms,458 ms,457 ms,456 ms)
   // NewLRUCache: (5  thread,1605 ms,1502 ms,1471 ms,1377 ms)
@@ -2014,8 +2003,8 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   // LRUCache: (16 thread,1656 ms,1337 ms,1625 ms,1559 ms) 99.804 %, 99.8122 %
 
   // SubListLRUCache: (2  thread,1012 ms,1008 ms,1007 ms,1007 ms) 99.9 %
-  // SubListLRUCache: (5  thread,1011 ms,877 ms,1234 ms,1242 ms) 99.7976837 %, 99.7518311 %
-  // SubListLRUCache: (10 thread,1107 ms,1050 ms,1044 ms,1167 ms) 99.5671082 %, 99.5787277 %
+  // SubListLRUCache: (5  thread,1011 ms,877 ms,1234 ms,1242 ms) 99.7976837 %, 99.7518311 % 
+  // SubListLRUCache: (10 thread,1107 ms,1050 ms,1044 ms,1167 ms) 99.5671082 %, 99.5787277 % 
   // SubListLRUCache: (16 thread,1196 ms,1159 ms,1167 ms,1201 ms) 99.2142487 %
 
   // SubListLRUCache2: (2  thread,979 ms,982 ms)
@@ -2024,16 +2013,17 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   // SubListLRUCache2: (16 thread,736 ms,740 ms,737 ms,5464 ms)
   int thread_num = 16;
   std::vector<std::vector<int64>> workers_ids(thread_num);
-  for (size_t i = 0; i < ids.size(); ++i)
-  {
-      workers_ids[i % (thread_num - 1)].push_back(ids[i]);
+  for (size_t i = 0; i < ids.size(); ++i) {
+    workers_ids[i % (thread_num - 1)].push_back(ids[i]);
   }
   std::vector<std::thread> insert_threads(thread_num);
-  for (size_t i = 0 ; i < thread_num - 1; i++) {
-    insert_threads[i] = std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+  for (size_t i = 0; i < thread_num - 1; i++) {
+    insert_threads[i] =
+        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
   }
-  insert_threads[thread_num - 1] = std::thread(RemoveCache, cache, capacity, batch_size*(thread_num-1));
-  for (auto &t : insert_threads) {
+  insert_threads[thread_num - 1] =
+      std::thread(RemoveCache, cache, capacity, batch_size * (thread_num - 1));
+  for (auto& t : insert_threads) {
     t.join();
   }
   uint64 end = Env::Default()->NowNanos();
@@ -2042,9 +2032,7 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   LOG(INFO) << cache->DebugString();
 }
 
-TEST(EmbeddingVariableTest, TestSimpleCalculation) {
-  SimpleCalculation();
-}
+TEST(EmbeddingVariableTest, TestSimpleCalculation) { SimpleCalculation(); }
 
 } // namespace
 } // namespace embedding
