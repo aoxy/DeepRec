@@ -1,7 +1,6 @@
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_CACHE_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_CACHE_H_
 #include <iostream>
-#include <map>
 #include <unordered_map>
 #include <set>
 #include <list>
@@ -179,7 +178,7 @@ class LRUCache : public BatchCache<K> {
     auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
-      typename std::map<K, LRUNode *>::iterator it = mp.find(id);
+      typename std::unordered_map<K, LRUNode *>::iterator it = mp.find(id);
       if (it != mp.end()) {
         LRUNode *node = it->second;
         node->pre->next = node->next;
@@ -259,7 +258,7 @@ class LRUCache : public BatchCache<K> {
      LRUNode(K id) : id(id), pre(nullptr), next(nullptr) {}
   };
   LRUNode *head, *tail;
-  std::map<K, LRUNode*> mp;
+  std::unordered_map<K, LRUNode*> mp;
   std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
   mutex mu_;
 };
@@ -561,6 +560,9 @@ class BlockLockLFUCache : public BatchCache<K> {
                    bool use_locking=true) {
     bool found;
     bool insert;
+    int batch_hit = 0;
+    int batch_miss = 0;
+    int batch_insert = 0;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       size_t block_idx = id % block_count_;
@@ -570,18 +572,18 @@ class BlockLockLFUCache : public BatchCache<K> {
         if (id == (*cache_[block_idx]).cache_block[j].id) {
           found = true;
           (*cache_[block_idx]).cache_block[j].count++;
-          __sync_fetch_and_add(&this->num_hit, 1);
+          batch_hit++;
         }
       }
       if (!found) {
-        __sync_fetch_and_add(&this->num_miss, 1);
+        batch_miss++;
         insert = false;
         size_t min_j = 0;
         size_t min_count = (*cache_[block_idx]).cache_block[min_j].count;
         for (size_t j = 0; j < way_; ++j) {
           if (-1 == (*cache_[block_idx]).cache_block[j].id) {
             insert = true;
-            __sync_fetch_and_add(&size_, 1);
+            batch_insert++;
             (*cache_[block_idx]).cache_block[j].id = id;
             (*cache_[block_idx]).cache_block[j].count = 1;
             break;
@@ -604,6 +606,9 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
+    __sync_fetch_and_add(&size_, batch_insert);
+    __sync_fetch_and_add(&this->num_hit, batch_hit);
+    __sync_fetch_and_add(&this->num_miss, batch_miss);
   }
 
   size_t get_cached_ids(K* cached_ids, size_t k_size,

@@ -1842,7 +1842,6 @@ void InsertCache(BatchCache<int64>* cache, std::vector<int64>* ids,
   for (size_t e = 0; e < 1; ++e) {
     size_t ids_idx = 0;
     size_t remain_size = ids->size() - ids_idx;
-    size_t total_size = remain_size;
 
     while (remain_size > batch_size) {
       to_array(ids->data(), ids_idx, batch_ids, batch_size);
@@ -1869,6 +1868,7 @@ void RemoveCache(BatchCache<int64>* cache, size_t capacity, size_t k_size) {
   size_t prev_size3 = 0;
   size_t prev_size4 = 0;
   size_t max_size = 0;
+  size_t sleep_us = 100000; /* 100ms */
   while (true) {
     prev_size4 = prev_size3;
     prev_size3 = prev_size2;
@@ -1883,8 +1883,12 @@ void RemoveCache(BatchCache<int64>* cache, size_t capacity, size_t k_size) {
     // LOG(INFO)<<"RemoveCache Current Size " << curr_size;
     if (curr_size > capacity) {
       cache->get_evic_ids(evic_ids, k_size);
+      sleep_us -= 1000;
+    } else {
+      sleep_us += 1000;
     }
-    usleep(100000); /* 100ms */
+    sleep_us = std::max(sleep_us, (size_t)1000);
+    usleep(sleep_us);
   }
   delete[] evic_ids;
   LOG(INFO) << "RemoveCache thread finish -> " << curr_size << " -> " << max_size;
@@ -1921,26 +1925,60 @@ class dataloder {
 };
 
 void TestCacheOnTaoBao(dataloder* dl, BatchCache<int64>* cache,
-                       size_t thread_num, size_t batch_size, size_t capacity) {
-  uint64 start = Env::Default()->NowNanos();
-  std::vector<std::vector<int64>> workers_ids(thread_num);
+                       size_t thread_num, size_t batch_size, size_t capacity, size_t way) {
+  size_t add_workers_num = thread_num - 1;
+  std::vector<std::vector<int64>> workers_ids(add_workers_num);
   for (size_t i = 0; i < dl->ids.size(); ++i) {
-    workers_ids[i % (thread_num - 1)].push_back(dl->ids[i]);
+    workers_ids[i % add_workers_num].push_back(dl->ids[i]);
   }
+  uint64 start = Env::Default()->NowNanos();
   std::vector<std::thread> insert_threads(thread_num);
-  for (size_t i = 0; i < thread_num - 1; i++) {
+  for (size_t i = 0; i < add_workers_num; i++) {
     insert_threads[i] =
         std::thread(InsertCache, cache, &workers_ids[i], batch_size);
   }
-  insert_threads[thread_num - 1] =
-      std::thread(RemoveCache, cache, capacity, batch_size * (thread_num - 1));
+  insert_threads[add_workers_num] =
+      std::thread(RemoveCache, cache, capacity, batch_size * add_workers_num);
   for (auto& t : insert_threads) {
     t.join();
   }
   uint64 end = Env::Default()->NowNanos();
   uint64 result_cost = end - start;
-  LOG(INFO) << typeid(*cache).name() << " Cost Time: " << result_cost / 1000000
-            << " ms";
+  if (typeid(*cache) == typeid(BlockLockLFUCache<int64>)) {
+    LOG(INFO) << typeid(*cache).name() << "(way=" << way
+              << ") Cost Time: " << result_cost / 1000000 << " ms";
+  } else {
+    LOG(INFO) << typeid(*cache).name()
+              << " Cost Time: " << result_cost / 1000000 << " ms";
+  }
+  LOG(INFO) << cache->DebugString();
+}
+
+void TestCacheOnTaoBaoNoEvic(dataloder* dl, BatchCache<int64>* cache,
+                       size_t thread_num, size_t batch_size, size_t capacity, size_t way) {
+  size_t add_workers_num = thread_num;
+  std::vector<std::vector<int64>> workers_ids(add_workers_num);
+  for (size_t i = 0; i < dl->ids.size(); ++i) {
+    workers_ids[i % add_workers_num].push_back(dl->ids[i]);
+  }
+  uint64 start = Env::Default()->NowNanos();
+  std::vector<std::thread> insert_threads(thread_num);
+  for (size_t i = 0; i < add_workers_num; i++) {
+    insert_threads[i] =
+        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+  }
+  for (auto& t : insert_threads) {
+    t.join();
+  }
+  uint64 end = Env::Default()->NowNanos();
+  uint64 result_cost = end - start;
+  if (typeid(*cache) == typeid(BlockLockLFUCache<int64>)) {
+    LOG(INFO) << typeid(*cache).name() << "(way=" << way
+              << ") Cost Time: " << result_cost / 1000000 << " ms";
+  } else {
+    LOG(INFO) << typeid(*cache).name()
+              << " Cost Time: " << result_cost / 1000000 << " ms";
+  }
   LOG(INFO) << cache->DebugString();
 }
 
@@ -1948,7 +1986,8 @@ TEST(EmbeddingVariableTest, TestCacheTaoBaoBatch) {
   size_t num_ids = 10000000;
   size_t capacity = 0;
   size_t batch_size = 128;
-  std::vector<size_t> thread_nums = {2, 5, 10, 16};
+  std::vector<size_t> thread_nums = {2, 4, 7, 11, 16};
+  std::vector<size_t> way_nums = {8, 16, 32};
   dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, num_ids);
   LOG(INFO) << "Taobao dataset loaded!";
   capacity = (size_t)(0.3 * dl.usize());
@@ -1957,47 +1996,69 @@ TEST(EmbeddingVariableTest, TestCacheTaoBaoBatch) {
   for (size_t i = 0; i < thread_nums.size(); i++) {
     LOG(INFO) << "thread_num = " << thread_nums[i];
     BatchCache<int64>* cache1 = new LRUCache<int64>();
-    BatchCache<int64>* cache2 = new NewLRUCache<int64>();
-    BatchCache<int64>* cache3 = new BlockLockLFUCache<int64>(capacity, 8);
-    BatchCache<int64>* cache4 = new BlockLockLFUCache<int64>(capacity, 16);
-    BatchCache<int64>* cache5 = new BlockLockLFUCache<int64>(capacity, 32);
+    std::vector<BatchCache<int64>*> caches;
+    for (size_t j = 0; j < way_nums.size(); j++) {
+      caches.push_back(new BlockLockLFUCache<int64>(capacity, way_nums[j]));
+    }
 
-    TestCacheOnTaoBao(&dl, cache1, thread_nums[i], batch_size, capacity);
-    TestCacheOnTaoBao(&dl, cache2, thread_nums[i], batch_size, capacity);
-    TestCacheOnTaoBao(&dl, cache3, thread_nums[i], batch_size, capacity);
-    TestCacheOnTaoBao(&dl, cache4, thread_nums[i], batch_size, capacity);
-    TestCacheOnTaoBao(&dl, cache5, thread_nums[i], batch_size, capacity);
+    TestCacheOnTaoBao(&dl, cache1, thread_nums[i], batch_size, capacity, 0);
+    for (size_t j = 0; j < way_nums.size(); j++) {
+      TestCacheOnTaoBao(&dl, caches[j], thread_nums[i], batch_size, capacity,
+                        way_nums[j]);
+    }
+  }
+}
+
+TEST(EmbeddingVariableTest, TestCacheTaoBaoNoEvicBatch) {
+  size_t num_ids = 10000000;
+  size_t capacity = 0;
+  size_t batch_size = 128;
+  std::vector<size_t> thread_nums = {1, 2, 5, 10, 16};
+  std::vector<size_t> way_nums = {8, 16, 32};
+  dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, num_ids);
+  LOG(INFO) << "Taobao dataset loaded!";
+  capacity = (size_t)(0.3 * dl.usize());
+  LOG(INFO) << "Cache Capacity = " << capacity;
+
+  for (size_t i = 0; i < thread_nums.size(); i++) {
+    LOG(INFO) << "thread_num = " << thread_nums[i];
+    BatchCache<int64>* cache1 = new LRUCache<int64>();
+    std::vector<BatchCache<int64>*> caches;
+    for (size_t j = 0; j < way_nums.size(); j++) {
+      caches.push_back(new BlockLockLFUCache<int64>(capacity, way_nums[j]));
+    }
+
+    TestCacheOnTaoBaoNoEvic(&dl, cache1, thread_nums[i], batch_size, capacity, 0);
+    for (size_t j = 0; j < way_nums.size(); j++) {
+      TestCacheOnTaoBaoNoEvic(&dl, caches[j], thread_nums[i], batch_size, capacity,
+                        way_nums[j]);
+    }
   }
 }
 
 TEST(EmbeddingVariableTest, TestLookupConcurrencyCacheTaoBao) {
   const int N = 10000000;
-  const int capacity = 10000;
+  const int capacity = 320000;
   size_t batch_size = 128;
   dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, N);
 
-  uint64 start = Env::Default()->NowNanos();
-
-  // BatchCache<int64>* cache = new LRUCache<int64>();
+  BatchCache<int64>* cache = new LRUCache<int64>();
   // BatchCache<int64>* cache = new NewLRUCache<int64>();
-  BatchCache<int64>* cache = new BlockLockLFUCache<int64>(capacity, 16);
+  // BatchCache<int64>* cache = new BlockLockLFUCache<int64>(capacity, 16);
 
   // LRUCache: (5  thread,)
   // LRUCache: (2  thread,)
   // LRUCache: (10 thread,)
   // LRUCache: (16 thread) (57444 ms, 974840, 89.3876 %) (58165 ms, 971496, 89.3476715 %)
 
-  // NewLRUCache: (5  thread,)
-  // NewLRUCache: (2  thread,)
-  // NewLRUCache: (10 thread,)
-  // NewLRUCache: (16 thread) (53960 ms, 1003787, 89.7137833 %) (53846 ms, 1004373, 89.7318726 %)
-
   // BlockLockLFUCache 16: (16 thread) (893 ms, 10000, 37.9969826 %) (53846 ms, 1004373, 89.7318726 %)
-  int thread_num = 16;
-  std::vector<std::vector<int64>> workers_ids(thread_num);
+
+  int thread_num = 2;
+  std::vector<std::vector<int64>> workers_ids(thread_num - 1);
   for (size_t i = 0; i < dl.ids.size(); ++i) {
     workers_ids[i % (thread_num - 1)].push_back(dl.ids[i]);
   }
+  uint64 start = Env::Default()->NowNanos();
   std::vector<std::thread> insert_threads(thread_num);
   for (size_t i = 0; i < thread_num - 1; i++) {
     insert_threads[i] =
