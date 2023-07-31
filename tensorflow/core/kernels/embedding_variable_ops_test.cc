@@ -1836,7 +1836,7 @@ void to_array(int64* ids, size_t ids_idx, int64* batch_ids, size_t batch_size) {
 }
 
 void InsertCache(BatchCache<int64>* cache, std::vector<int64>* ids,
-                 size_t batch_size) {
+                 size_t batch_size, size_t* insert_flag) {
   // LOG(INFO) << "InsertCache ID Size " << ids->size();
   int64* batch_ids = new int64[batch_size];
   for (size_t e = 0; e < 1; ++e) {
@@ -1857,29 +1857,20 @@ void InsertCache(BatchCache<int64>* cache, std::vector<int64>* ids,
     }
   }
   delete[] batch_ids;
+  __sync_fetch_and_add(insert_flag, 1);
   // LOG(INFO)<<"InsertCache thread finish";
 }
 
-void RemoveCache(BatchCache<int64>* cache, size_t capacity, size_t k_size) {
+void RemoveCache(BatchCache<int64>* cache, size_t capacity, size_t batch_size,
+                 size_t add_workers_num, size_t* insert_flag) {
+  size_t k_size = batch_size * add_workers_num;
   int64* evic_ids = new int64[k_size];
   size_t curr_size = -1;
-  size_t prev_size1 = 0;
-  size_t prev_size2 = 0;
-  size_t prev_size3 = 0;
-  size_t prev_size4 = 0;
   size_t max_size = 0;
-  size_t sleep_us = 100000; /* 100ms */
-  while (true) {
-    prev_size4 = prev_size3;
-    prev_size3 = prev_size2;
-    prev_size2 = prev_size1;
-    prev_size1 = curr_size;
+  size_t sleep_us = 10000; /* 10 ms */
+  while (*insert_flag < add_workers_num) {
     curr_size = cache->size();
     max_size = std::max(max_size, curr_size);
-    if (curr_size == prev_size1 && prev_size1 == prev_size2 &&
-        prev_size2 == prev_size3 && prev_size3 == prev_size4) {
-      break;
-    }
     // LOG(INFO)<<"RemoveCache Current Size " << curr_size;
     if (curr_size > capacity) {
       cache->get_evic_ids(evic_ids, k_size);
@@ -1891,7 +1882,8 @@ void RemoveCache(BatchCache<int64>* cache, size_t capacity, size_t k_size) {
     usleep(sleep_us);
   }
   delete[] evic_ids;
-  LOG(INFO) << "RemoveCache thread finish -> " << curr_size << " -> " << max_size;
+  LOG(INFO) << "RemoveCache thread finish -> " << curr_size << " -> "
+            << max_size;
 }
 
 class dataloder {
@@ -1925,8 +1917,10 @@ class dataloder {
 };
 
 void TestCacheOnTaoBao(dataloder* dl, BatchCache<int64>* cache,
-                       size_t thread_num, size_t batch_size, size_t capacity, size_t way) {
+                       size_t thread_num, size_t batch_size, size_t capacity,
+                       size_t way) {
   size_t add_workers_num = thread_num - 1;
+  size_t insert_flag = 0;
   std::vector<std::vector<int64>> workers_ids(add_workers_num);
   for (size_t i = 0; i < dl->ids.size(); ++i) {
     workers_ids[i % add_workers_num].push_back(dl->ids[i]);
@@ -1934,11 +1928,11 @@ void TestCacheOnTaoBao(dataloder* dl, BatchCache<int64>* cache,
   uint64 start = Env::Default()->NowNanos();
   std::vector<std::thread> insert_threads(thread_num);
   for (size_t i = 0; i < add_workers_num; i++) {
-    insert_threads[i] =
-        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+    insert_threads[i] = std::thread(InsertCache, cache, &workers_ids[i],
+                                    batch_size, &insert_flag);
   }
-  insert_threads[add_workers_num] =
-      std::thread(RemoveCache, cache, capacity, batch_size * add_workers_num);
+  insert_threads[add_workers_num] = std::thread(
+      RemoveCache, cache, capacity, batch_size, add_workers_num, &insert_flag);
   for (auto& t : insert_threads) {
     t.join();
   }
@@ -1955,8 +1949,10 @@ void TestCacheOnTaoBao(dataloder* dl, BatchCache<int64>* cache,
 }
 
 void TestCacheOnTaoBaoNoEvic(dataloder* dl, BatchCache<int64>* cache,
-                       size_t thread_num, size_t batch_size, size_t capacity, size_t way) {
+                             size_t thread_num, size_t batch_size,
+                             size_t capacity, size_t way) {
   size_t add_workers_num = thread_num;
+  size_t insert_flag = 0;
   std::vector<std::vector<int64>> workers_ids(add_workers_num);
   for (size_t i = 0; i < dl->ids.size(); ++i) {
     workers_ids[i % add_workers_num].push_back(dl->ids[i]);
@@ -1964,8 +1960,8 @@ void TestCacheOnTaoBaoNoEvic(dataloder* dl, BatchCache<int64>* cache,
   uint64 start = Env::Default()->NowNanos();
   std::vector<std::thread> insert_threads(thread_num);
   for (size_t i = 0; i < add_workers_num; i++) {
-    insert_threads[i] =
-        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+    insert_threads[i] = std::thread(InsertCache, cache, &workers_ids[i],
+                                    batch_size, &insert_flag);
   }
   for (auto& t : insert_threads) {
     t.join();
@@ -1983,13 +1979,13 @@ void TestCacheOnTaoBaoNoEvic(dataloder* dl, BatchCache<int64>* cache,
 }
 
 TEST(EmbeddingVariableTest, TestCacheTaoBaoBatch) {
-  size_t num_ids = 10000000;
+  size_t num_ids = 0;
   size_t capacity = 0;
   size_t batch_size = 128;
   std::vector<size_t> thread_nums = {2, 4, 7, 11, 16};
   std::vector<size_t> way_nums = {8, 16, 32};
   dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, num_ids);
-  LOG(INFO) << "Taobao dataset loaded!";
+  LOG(INFO) << "Taobao dataset loaded! length = " << dl.ids.size();
   capacity = (size_t)(0.3 * dl.usize());
   LOG(INFO) << "Cache Capacity = " << capacity;
 
@@ -2010,13 +2006,13 @@ TEST(EmbeddingVariableTest, TestCacheTaoBaoBatch) {
 }
 
 TEST(EmbeddingVariableTest, TestCacheTaoBaoNoEvicBatch) {
-  size_t num_ids = 10000000;
+  size_t num_ids = 0;
   size_t capacity = 0;
   size_t batch_size = 128;
   std::vector<size_t> thread_nums = {1, 2, 5, 10, 16};
   std::vector<size_t> way_nums = {8, 16, 32};
   dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, num_ids);
-  LOG(INFO) << "Taobao dataset loaded!";
+  LOG(INFO) << "Taobao dataset loaded! length = " << dl.ids.size();
   capacity = (size_t)(0.3 * dl.usize());
   LOG(INFO) << "Cache Capacity = " << capacity;
 
@@ -2028,10 +2024,11 @@ TEST(EmbeddingVariableTest, TestCacheTaoBaoNoEvicBatch) {
       caches.push_back(new BlockLockLFUCache<int64>(capacity, way_nums[j]));
     }
 
-    TestCacheOnTaoBaoNoEvic(&dl, cache1, thread_nums[i], batch_size, capacity, 0);
+    TestCacheOnTaoBaoNoEvic(&dl, cache1, thread_nums[i], batch_size, capacity,
+                            0);
     for (size_t j = 0; j < way_nums.size(); j++) {
-      TestCacheOnTaoBaoNoEvic(&dl, caches[j], thread_nums[i], batch_size, capacity,
-                        way_nums[j]);
+      TestCacheOnTaoBaoNoEvic(&dl, caches[j], thread_nums[i], batch_size,
+                              capacity, way_nums[j]);
     }
   }
 }
@@ -2040,6 +2037,7 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCacheTaoBao) {
   const int N = 10000000;
   const int capacity = 320000;
   size_t batch_size = 128;
+  size_t insert_flag = 0;
   dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, N);
 
   BatchCache<int64>* cache = new LRUCache<int64>();
@@ -2049,9 +2047,11 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCacheTaoBao) {
   // LRUCache: (5  thread,)
   // LRUCache: (2  thread,)
   // LRUCache: (10 thread,)
-  // LRUCache: (16 thread) (57444 ms, 974840, 89.3876 %) (58165 ms, 971496, 89.3476715 %)
+  // LRUCache: (16 thread) (57444 ms, 974840, 89.3876 %) (58165 ms,
+  // 971496, 89.3476715 %)
 
-  // BlockLockLFUCache 16: (16 thread) (893 ms, 10000, 37.9969826 %) (53846 ms, 1004373, 89.7318726 %)
+  // BlockLockLFUCache 16: (16 thread) (893 ms, 10000, 37.9969826 %) (53846 ms,
+  // 1004373, 89.7318726 %)
 
   int thread_num = 2;
   std::vector<std::vector<int64>> workers_ids(thread_num - 1);
@@ -2061,11 +2061,11 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCacheTaoBao) {
   uint64 start = Env::Default()->NowNanos();
   std::vector<std::thread> insert_threads(thread_num);
   for (size_t i = 0; i < thread_num - 1; i++) {
-    insert_threads[i] =
-        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+    insert_threads[i] = std::thread(InsertCache, cache, &workers_ids[i],
+                                    batch_size, &insert_flag);
   }
-  insert_threads[thread_num - 1] =
-      std::thread(RemoveCache, cache, capacity, batch_size * (thread_num - 1));
+  insert_threads[thread_num - 1] = std::thread(
+      RemoveCache, cache, capacity, batch_size, thread_num - 1, &insert_flag);
   for (auto& t : insert_threads) {
     t.join();
   }
@@ -2080,6 +2080,7 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   const int uniqueN = 10000;
   const int capacity = 1000;
   size_t batch_size = 128;
+  size_t insert_flag = 0;
   int freq_list[] = {30, 20, 18, 15, 12, 8, 5, 3, 2, 1, 2, 1, 1};
   std::vector<int64> ids(N);
   std::vector<int64> uids(uniqueN);
@@ -2115,9 +2116,10 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   // LRUCache: (16 thread,1656 ms,1337 ms,1625 ms,1559 ms) 99.804 %, 99.8122 %
 
   // SubListLRUCache: (2  thread,1012 ms,1008 ms,1007 ms,1007 ms) 99.9 %
-  // SubListLRUCache: (5  thread,1011 ms,877 ms,1234 ms,1242 ms) 99.7976837 %, 99.7518311 % 
-  // SubListLRUCache: (10 thread,1107 ms,1050 ms,1044 ms,1167 ms) 99.5671082 %, 99.5787277 % 
-  // SubListLRUCache: (16 thread,1196 ms,1159 ms,1167 ms,1201 ms) 99.2142487 %
+  // SubListLRUCache: (5  thread,1011 ms,877 ms,1234 ms,1242 ms) 99.7976837
+  // %, 99.7518311 % SubListLRUCache: (10 thread,1107 ms,1050 ms,1044 ms,1167
+  // ms) 99.5671082 %, 99.5787277 % SubListLRUCache: (16 thread,1196 ms,1159
+  // ms,1167 ms,1201 ms) 99.2142487 %
 
   // SubListLRUCache2: (2  thread,979 ms,982 ms)
   // SubListLRUCache2: (5  thread,976 ms,520 ms,517 ms,972 ms)
@@ -2130,11 +2132,11 @@ TEST(EmbeddingVariableTest, TestLookupConcurrencyCache) {
   }
   std::vector<std::thread> insert_threads(thread_num);
   for (size_t i = 0; i < thread_num - 1; i++) {
-    insert_threads[i] =
-        std::thread(InsertCache, cache, &workers_ids[i], batch_size);
+    insert_threads[i] = std::thread(InsertCache, cache, &workers_ids[i],
+                                    batch_size, &insert_flag);
   }
-  insert_threads[thread_num - 1] =
-      std::thread(RemoveCache, cache, capacity, batch_size * (thread_num - 1));
+  insert_threads[thread_num - 1] = std::thread(
+      RemoveCache, cache, capacity, batch_size, thread_num - 1, &insert_flag);
   for (auto& t : insert_threads) {
     t.join();
   }
