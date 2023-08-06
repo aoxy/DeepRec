@@ -59,22 +59,35 @@ __global__ void SetToIntMaxSTG128(const int batch_size, int* values_offset) {
   }
 }
 
-__global__ void CalcPerElementRowOffset(int batch_size, int nnz,
-                                        int stride, const int64_t* indices,
-                                        volatile int* values_offset) {
+__device__ void FilledEmptyRowNumber(int batch_size, volatile int* values_offset) {
   const int thread_offset = blockIdx.x * blockDim.x + threadIdx.x;
   const int int_max = 0x7fffffff;
+  if (thread_offset > 1) {
+    if (thread_offset < batch_size) {
+        while (values_offset[thread_offset] == int_max) {
+          const int compare = values_offset[thread_offset-1];
+          if (compare != int_max) {
+            atomicMin((int*)values_offset + thread_offset, compare);
+          }
+        }
+      }
+  } else {
+    if (values_offset[thread_offset] == int_max) {
+      values_offset[thread_offset] = 0;
+    }
+  }
+}
+
+__global__ void CalcPerElementRowOffset(int batch_size, int nnz,
+                                        int stride, const int64_t* indices,
+                                        int* values_offset) {
+  const int thread_offset = blockIdx.x * blockDim.x + threadIdx.x;
   if (thread_offset < nnz) {
     const int64_t element_row = indices[stride*thread_offset];
     atomicMin((int*)values_offset + int(element_row), thread_offset);
-    __syncthreads();
-    if (thread_offset < int(batch_size - 1)) {
-      while (values_offset[thread_offset + 1] == int_max) {
-      }
-      const int compare = values_offset[thread_offset + 1];
-      atomicMin((int*)values_offset + thread_offset, compare);
-    }
   }
+  __syncthreads();
+  FilledEmptyRowNumber(batch_size, values_offset);
 }
 
 inline void launch_cal_per_element_row_offset(const int batch_size, int nnz, int stride,
@@ -85,7 +98,6 @@ inline void launch_cal_per_element_row_offset(const int batch_size, int nnz, int
   int blocks = (batch_size - 1) / threads + 1;
 
   SetToIntMaxSTG128<<<blocks, threads, 0, stream>>>(batch_size, offset_indices);
-
   blocks = (nnz - 1) / threads + 1;
   CalcPerElementRowOffset<<<blocks, threads, 0, stream>>>(
       batch_size, nnz, stride, sp_indices, offset_indices);
@@ -116,14 +128,14 @@ __global__ void WeightedEmbeddingVarComputeFn(
       }
 
       float out = 0.0f;
-
-      // #pragma unroll
+      float total_batch_weight = 0.0f;
       if (feature_num > 0) {
         for (int j = 0; j < feature_num; ++j) {
           size_t feature_indices = value_offset + j;
           int64_t embedding_offset = feature_indices * dimension;
           TValue sum = args[ev_id].emb_variable_[embedding_offset + tid];
           TValue sp_weights = args[ev_id].sp_weights_[feature_indices];
+          total_batch_weight += sp_weights;
           if (max_norm >= 0.0) {
             if (tid == 0) {
               l2_sum = 0.0;
@@ -138,7 +150,7 @@ __global__ void WeightedEmbeddingVarComputeFn(
           }
           out = __fmaf_rn(sum, sp_weights, out);
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, TValue>(out, total_batch_weight);
       }
       args[ev_id].emb_vector_[bid * dimension + tid] = out;
     }
@@ -169,7 +181,7 @@ __global__ void WeightedVariableComputeFn(
       }
 
       TValue out = 0.0f;
-
+      TValue total_batch_weight = 0.0f;
       const TValue* emb_variable = args[ev_id].emb_variable_;
       // #pragma unroll
       if (feature_num > 0) {
@@ -177,6 +189,7 @@ __global__ void WeightedVariableComputeFn(
           size_t feature_indices = value_offset + i;
           int embedding_indices = int(args[ev_id].sp_values_[feature_indices]);
           TValue sp_weights = args[ev_id].sp_weights_[embedding_indices];
+          total_batch_weight += sp_weights;
           TValue emb_element = emb_variable[feature_indices];
           if (max_norm >= 0.0f) {
             // calc l2 norm of this emb row(per block) and compare with
@@ -196,7 +209,7 @@ __global__ void WeightedVariableComputeFn(
           }
           out = __fmaf_rn(emb_element, sp_weights, out);
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, TValue>(out, total_batch_weight);
       }
       args[ev_id].emb_vector_[bid * emb_vec_size + tid] = out;
     }
@@ -227,7 +240,7 @@ __global__ void EmbeddingVarComputeFn(
         feature_num = args[ev_id].offset_indices_[bid + 1] - value_offset;
       }
       TValue out = 0.0;
-
+      
       // #pragma unroll
       if (feature_num > 0) {
         for (int j = 0; j < feature_num; ++j) {
@@ -247,7 +260,7 @@ __global__ void EmbeddingVarComputeFn(
           }
           out += sum;
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, int>(out, feature_num);
       }
       args[ev_id].emb_vector_[bid * dimension + tid] = out;
     }
@@ -303,7 +316,7 @@ __global__ void VariableComputeFn(
           }
           out += emb_element;
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, int>(out, feature_num);
       }
       args[ev_id].emb_vector_[bid * emb_vec_size + tid] = out;
     }
@@ -352,7 +365,7 @@ __global__ void NormalEmbeddingVarComputeFn(
           }
           out += sum;
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, int>(out, feature_num);
       }
       args[ev_id].emb_vector_[bid * dimension + tid] = out;
     }
@@ -406,7 +419,7 @@ __global__ void NormalVariableComputeFn(
           }
           out += emb_element;
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, int>(out, feature_num);
       }
       args[ev_id].emb_vector_[bid * emb_vec_size + tid] = out;
     }
@@ -434,8 +447,8 @@ __global__ void NormalWeightedEmbeddingVarComputeFn(
       } else {
         feature_num = args[ev_id].offset_indices_[bid + 1] - value_offset;
       }
-      TValue out = 0.0;
-
+      TValue out = 0.0f;
+      TValue total_batch_weight = 0.0f;
       // #pragma unroll
       if (feature_num > 0) {
         for (int j = 0; j < feature_num; ++j) {
@@ -443,6 +456,7 @@ __global__ void NormalWeightedEmbeddingVarComputeFn(
           int64_t embedding_offset = feature_indices * dimension;
           TValue sum = args[ev_id].emb_variable_[embedding_offset + tid];
           TValue sp_weights = args[ev_id].sp_weights_[feature_indices];
+          total_batch_weight += sp_weights;
           if (max_norm >= 0.0) {
             if (tid == 0) {
               l2_sum[0] = 0.0;
@@ -457,7 +471,7 @@ __global__ void NormalWeightedEmbeddingVarComputeFn(
           }
           out = __fmaf_rn(sum, sp_weights, out);
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, TValue>(out, total_batch_weight);
       }
       args[ev_id].emb_vector_[bid * dimension + tid] = out;
     }
@@ -485,7 +499,7 @@ __global__ void NormalWeightedVariableComputeFn(
         feature_num = args[ev_id].offset_indices_[bid + 1] - value_offset;
       }
       TValue out = 0.0f;
-
+      TValue total_batch_weight = 0.0f;
       const TValue* emb_variable = args[ev_id].emb_variable_;
 
       // #pragma unroll
@@ -496,6 +510,7 @@ __global__ void NormalWeightedVariableComputeFn(
           TValue emb_element =
               emb_variable[embedding_indices * emb_vec_size + tid];
           TValue sp_weights = args[ev_id].sp_weights_[feature_indices];
+          total_batch_weight += sp_weights;
           // printf("indices is %d emb_element is %f\n", indices, emb_element);
           if (max_norm >= 0.0f) {
             // calc l2 norm of this emb row(per block) and compare with
@@ -515,7 +530,7 @@ __global__ void NormalWeightedVariableComputeFn(
           }
           out = __fmaf_rn(emb_element, sp_weights, out);
         }
-        out = Combine<combiner>(out, feature_num);
+        out = Combine<combiner, int>(out, feature_num);
       }
       args[ev_id].emb_vector_[bid * emb_vec_size + tid] = out;
     }
@@ -556,7 +571,7 @@ class GroupEmbeddingLookupForWard {
 
     {
       if (tile_size <= 32) {
-        const int block_size = batch_size / 64 * tile_size + 1;
+	const int block_size = batch_size * tile_size / 64 + 1;
         compute_fn<<<block_size, 64, 0, stream>>>(batch_size, dimension_,
                                                   max_norm_, ev_nums_, d_args_);
       } else {

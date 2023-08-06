@@ -37,6 +37,9 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
       : MultiTierStorage<K, V>(sc, name) {
     dram_ = new DramStorage<K, V>(sc, dram_alloc, lc, new LocklessHashMap<K, V>());
     pmem_ = new PmemLibpmemStorage<K, V>(sc, pmem_alloc, lc);
+    value_ptr_size_ =
+        const_cast<EmbeddingConfig&>(sc.embedding_config).total_num(
+            Storage<K, V>::GetAllocLen());
   }
 
   ~DramPmemStorage() override {
@@ -49,8 +52,21 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
 
   Status Get(K key, ValuePtr<V>** value_ptr) override {
     Status s = dram_->Get(key, value_ptr);
-    if (!s.ok()) {
-      s = pmem_->Get(key, value_ptr);
+    if (s.ok()) {
+      return s;
+    }
+    s = pmem_->Get(key, value_ptr);
+    if (s.ok()) {
+      ValuePtr<V>* new_value_ptr = dram_->CreateValuePtr(value_ptr_size_);
+      memcpy(new_value_ptr->GetPtr(), (*value_ptr)->GetPtr(),
+             sizeof(FixedLengthHeader) + sizeof(V) * value_ptr_size_);
+      *value_ptr = new_value_ptr;
+      s = dram_->TryInsert(key, *value_ptr);
+      if (s.ok()) {
+        return s;
+      }
+      dram_->DestroyValuePtr(*value_ptr);
+      return dram_->Get(key, value_ptr);
     }
     return s;
   }
@@ -60,10 +76,9 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
   }
 
   void Insert(K key, ValuePtr<V>** value_ptr,
-              size_t alloc_len) override {
+              size_t alloc_len, bool to_dram = false) override {
     dram_->Insert(key, value_ptr, alloc_len);
   }
-
   Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
       size_t size, CopyBackFlag &need_copyback) override {
      LOG(FATAL)<<"GetOrCreate(K key, ValuePtr<V>** value_ptr, "
@@ -76,12 +91,6 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
   }
 
   bool IsSingleHbm() override {
-    return false;
-  }
-
-  bool IsUsePersistentStorage() override {
-    /*The return value is set to false temporarily,
-      because the corresponding interface is not implemented.*/
     return false;
   }
 
@@ -229,6 +238,7 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
  private:
   DramStorage<K, V>* dram_;
   PmemLibpmemStorage<K, V>* pmem_;
+  int64 value_ptr_size_;
 };
 } // embedding
 } // tensorflow

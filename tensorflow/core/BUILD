@@ -2946,6 +2946,7 @@ tf_cuda_library(
         ":framework_internal_headers_lib",
         "//third_party/eigen3",
         ":lib",
+        "@readerwriterqueue_archive//:readerwriterqueue",
     ] + if_static(
         extra_deps = [
             ":framework_internal_impl",
@@ -3024,7 +3025,8 @@ tf_cuda_library(
             "framework/embedding/batch.h",
             "framework/embedding/gpu_hash_table.cu.cc",
             "framework/embedding/gpu_hash_table.h",
-            "framework/embedding/embedding_var.cu.cc"
+            "framework/embedding/embedding_var.cu.cc",
+            "framework/embedding/multi_tier_storage.cu.cc"
         ],
     ) + select({
         "//tensorflow:windows": [],
@@ -3062,6 +3064,7 @@ tf_cuda_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
+        "@readerwriterqueue_archive//:readerwriterqueue",
         "//tensorflow/core/platform/default/build_config:platformlib",
         "//tensorflow/core:framework/bfloat16",
         "//tensorflow/core:framework/numeric_types",
@@ -3501,6 +3504,7 @@ tf_cuda_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:optional",
         "//third_party/eigen3",
+        "//tensorflow/cc:prefetch_runner",
         "//tensorflow/core/grappler/utils:functions",
         "//tensorflow/core/profiler:nvtx_utils",
         "//tensorflow/core/profiler/lib:traceme",

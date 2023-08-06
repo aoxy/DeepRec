@@ -19,6 +19,9 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 
 namespace tensorflow {
+namespace {
+const char* kInferenceMode = "INFERENCE_MODE";
+}
 
 template <class V>
 class ValuePtr;
@@ -98,7 +101,7 @@ class KVInterface {
   virtual Iterator* GetIterator() { return nullptr; }
 
   virtual Status BatchLookupOrCreate(const K* keys, V* val, V* default_v,
-      int32 default_v_num, bool is_use_default_value_tensor,
+      int32 default_v_num,
       size_t n, const Eigen::GpuDevice& device) {
     return Status::OK();
   }
@@ -107,12 +110,17 @@ class KVInterface {
     return Status::OK();
   }
 
+  virtual Status BatchLookup(const Eigen::GpuDevice& device, 
+      const K* keys, V* val, size_t n, const V* default_v) {
+    return Status(error::Code::UNIMPLEMENTED,
+                  "Unimplemented for BatchLookup in KVInterface.");
+  }
+  
   virtual GPUHashTable<K, V>* HashTable() {
     return nullptr;
   }
 
   virtual void SetValueLen(int64 value_len) {}
-
 };
 
 }  // namespace embedding

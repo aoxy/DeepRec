@@ -460,6 +460,54 @@ tf_cuda_cc_test(
     ],
 )
 
+tf_cuda_cc_test(
+    name = "embedding_variable_performance_test",
+    srcs = ["embedding_variable_performance_test.cc",
+            "embedding_variable_test.h"],
+    extra_copts = ["-fexceptions", "-g"],
+    deps = [
+        ":io",
+        ":ops_testutil",
+        ":ops_util",
+        "//tensorflow/core:all_kernels",
+        "//tensorflow/core:core_cpu",
+        "//tensorflow/core:core_cpu_internal",
+        "//tensorflow/core:direct_session_internal",
+        "//tensorflow/core/util/tensor_bundle",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:test",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core:testlib",
+        "//third_party/eigen3",
+        "//tensorflow/core:test_main",
+    ],
+)
+
+tf_cuda_cc_test(
+    name = "embedding_variable_memory_test",
+    srcs = ["embedding_variable_memory_test.cc",
+            "embedding_variable_test.h"],
+    extra_copts = ["-fexceptions", "-g"],
+    deps = [
+        ":io",
+        ":ops_testutil",
+        ":ops_util",
+        "//tensorflow/core:all_kernels",
+        "//tensorflow/core:core_cpu",
+        "//tensorflow/core:core_cpu_internal",
+        "//tensorflow/core:direct_session_internal",
+        "//tensorflow/core/util/tensor_bundle",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:test",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core:testlib",
+        "//third_party/eigen3",
+        "//tensorflow/core:test_main",
+    ],
+)
+
 cc_library(
     name = "tensor_flag_utils",
     srcs = [
@@ -2890,7 +2938,8 @@ cuda_library(
         "//tensorflow/core:common_runtime/gpu/gpu_event_mgr.h"
     ],
     srcs = [
-        "//tensorflow/core:framework/embedding/embedding_var.cu.cc"
+        "//tensorflow/core:framework/embedding/embedding_var.cu.cc",
+        "//tensorflow/core:framework/embedding/multi_tier_storage.cu.cc"
     ],
     copts = tf_copts() + ["-g"]
         + if_cuda(["-DGOOGLE_CUDA=1"]) +
@@ -2905,7 +2954,9 @@ cuda_library(
         }),
     visibility = ["//visibility:public"],
     deps = [
+        ":save_restore_tensor",
         "//tensorflow/core:stream_executor",
+        "//tensorflow/core/util/tensor_bundle",
         "//tensorflow/core/kernels:gpu_device_array"] + ["//third_party/eigen3"]
 )
 
@@ -5408,6 +5459,8 @@ tf_kernel_library(
             "@sparsehash_c11//:dense_hash_map",
             "@libcuckoo//:libcuckoo",
             ":unique_ali_op",
+            ":save_restore_tensor",
+            "//tensorflow/core/util/tensor_bundle",
             "@com_github_google_leveldb//:leveldb",] + DYNAMIC_DEPS + mkl_deps() +
            if_cuda(["@cub_archive//:cub",
                     ":fused_embedding_common_cuh",

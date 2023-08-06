@@ -264,10 +264,13 @@ def _embedding_lookup_and_transform(params,
       gather_ids = data_flow_ops.dynamic_partition(new_ids, p_assignments, np)
       gather_blocknums = None
       gather_ev_init_value = None
+      gather_counts = None
       if isinstance(params[0], kv_variable_ops.DynamicEmbeddingVariable): 
         gather_blocknums = data_flow_ops.dynamic_partition(blocknums, p_assignments, np)
       if ev_init_value is not None:
         gather_ev_init_value = data_flow_ops.dynamic_partition(ev_init_value, p_assignments, np)
+      if counts is not None:
+        gather_counts = data_flow_ops.dynamic_partition(counts, p_assignments, np)
       # Similarly, partition the original indices.
       pindices = data_flow_ops.dynamic_partition(original_indices,
                                                  p_assignments, np)
@@ -297,7 +300,11 @@ def _embedding_lookup_and_transform(params,
               new_ev_init_value = None
             else:
               new_ev_init_value = gather_ev_init_value[p]
-            result = array_ops.gather(params[p], pids, ev_init_value=new_ev_init_value, counts=counts)
+            if counts is None:
+              new_counts = None
+            else:
+              new_counts = gather_counts[p]
+            result = array_ops.gather(params[p], pids, ev_init_value=new_ev_init_value, counts=new_counts)
             if transform_fn:
               # If transform_fn is provided, the clip_by_norm precedes
               # the transform and hence must be co-located. See below
@@ -570,8 +577,8 @@ def embedding_lookup_sparse(params,
       segment_ids = math_ops.cast(segment_ids, dtypes.int32)
 
     ids = sp_ids.values
-    if isinstance(params[0], kv_variable_ops.EmbeddingVariable) and params[0]._filter_freq > 0:
-      ids, idx, counts = array_ops.unique_with_counts(ids)
+    if isinstance(params[0], kv_variable_ops.EmbeddingVariable) and params[0].need_counts():
+      ids, idx, counts = array_ops.unique_with_counts(ids, out_idx=dtypes.int64)
     else:
       ids, idx = array_ops.unique(ids)
       counts = None
@@ -1635,6 +1642,14 @@ def group_embedding_lookup_sparse(params,
     if not isinstance(params, list):
         params = [params]
 
+    #Currently do not support PartitionedVariable.
+    for index, param in enumerate(params):
+      if isinstance(param, variables.PartitionedVariable):
+        tmp_param = list(param)
+        if len(tmp_param) != 1:
+          raise TypeError("PartitionedVariable not support in 'group_embedding_lookup_sparse'. ")
+        params[index] = tmp_param[0]
+
     ignore_weights = sp_weights is None
 
     if len(combiners) != len(sp_ids):
@@ -1648,14 +1663,18 @@ def group_embedding_lookup_sparse(params,
             raise ValueError('len of combiners must be equal to len of sp_weights'
                              )
 
-  # # Currently not doing unique
-
     strategy = get_group_lookup_strategy()
-    if strategy == DistStrategy.COLLECTIVE:
-        for (index, param) in enumerate(params):
-            if isinstance(param, variables.PartitionedVariable):
-                raise TypeError("PartitionedVariable not support in 'group_embedding_lookup_sparse'. "
-                                )
+    if strategy == DistStrategy.SOK:
+        import horovod.tensorflow as hvd
+        should_shard = False
+        if len(params) > hvd.size():
+          should_shard = True
+          global_size = hvd.size()
+        if should_shard:
+          for (index, param) in enumerate(params):
+            param.target_gpu = index % global_size
+        else:
+          for (index, param) in enumerate(params):
             param.target_gpu = -1
 
         try:
@@ -1665,7 +1684,22 @@ def group_embedding_lookup_sparse(params,
                               )
         with ops.name_scope(name, 'group_embedding_lookup', params
                             + sp_ids) as name_scope:
-            emb_vec = sok.lookup_sparse(params, sp_ids, combiners)
+            emb_vec = sok.lookup_sparse(params, sp_ids, combiners=combiners)
+    elif strategy == DistStrategy.HB:
+      emb_vec = []
+      with ops.name_scope(name, 'group_embedding_lookup', params
+                            + sp_ids) as name_scope:
+          for idx, embedding in enumerate(params):
+            if not ignore_weights:
+              sp_weight = sp_weights[idx]
+            else:
+              sp_weight = None
+            emb_vec.append(embedding_lookup_sparse(embedding,
+                                              sp_ids[idx],
+                                              sp_weight,
+                                              combiner=combiners[idx]))
+
+      
     elif strategy == DistStrategy.LOCALIZED:
 
       emb_vec = [None for _ in range(len(params))]
@@ -1683,6 +1717,7 @@ def group_embedding_lookup_sparse(params,
         if not isinstance(sp_id, sparse_tensor.SparseTensor):
           try:  # assume RaggedTensor
             sp_id = sp_id.to_sparse()
+            sp_ids[index] = sp_id
           except:
             raise ValueError('sp_id is neither SparseTensor nor RaggedTensor!')
 
@@ -1789,7 +1824,7 @@ def group_embedding_lookup_sparse(params,
                   (ev_handlers[group_id])[-num_remainder:],
                   (ev_sp_values[group_id])[-num_remainder:],
                   (ev_sp_indices[group_id])[-num_remainder:],
-                  (ev_sp_weights[group_id])[-num_remainder:],
+                  sub_ev_sp_weight,
                   ev_combiners[group_id],
                   (ev_dense_shapes[group_id])[-num_remainder:],
                   dim,

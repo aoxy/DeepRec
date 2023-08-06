@@ -15,11 +15,7 @@
 
 | GCC Version | Python Version | CUDA VERSION |                           IMAGE                                 |
 | ----------- | -------------- | ------------ | --------------------------------------------------------------- |
-|    7.5.0    |    3.6.9       | CUDA 11.0.3  | alideeprec/deeprec-base:deeprec-base-gpu-py36-cu110-ubuntu18.04 |
-|    7.5.0    |    3.6.9       | CUDA 11.2.2  | alideeprec/deeprec-base:deeprec-base-gpu-py36-cu112-ubuntu18.04 |
-|    7.5.0    |    3.6.9       | CUDA 11.4.2  | alideeprec/deeprec-base:deeprec-base-gpu-py36-cu114-ubuntu18.04 |
 |    7.5.0    |    3.6.9       | CUDA 11.6.1  | alideeprec/deeprec-base:deeprec-base-gpu-py36-cu116-ubuntu18.04 |
-|    7.5.0    |    3.6.9       | CUDA 11.7.1  | alideeprec/deeprec-base:deeprec-base-gpu-py36-cu117-ubuntu18.04 |
 |    9.4.0    |    3.8.10      | CUDA 11.6.2  | alideeprec/deeprec-base:deeprec-base-gpu-py38-cu116-ubuntu20.04 |
 |    11.2.0   |    3.8.6       | CUDA 11.7.1  | alideeprec/deeprec-base:deeprec-base-gpu-py38-cu117-ubuntu22.04 |
 
@@ -51,12 +47,15 @@ Configure TF_CUDA_COMPUTE_CAPABILITIES could improve performance, please follow 
 | Volta (V100)        | 7.0                          |
 | Turing (T4)         | 7.5                          |
 | Ampere (A10, A100)  | 8.0+8.6                      |
+| Hopper (H100, H800) | 9.0                          |
 
-If you need to compile DeepRec wheel that run on different GPU architecture, configure TF_CUDA_COMPUTE_CAPABILITIES such as:
+If you need to compile DeepRec wheel that run on different GPU architecture, configure TF_CUDA_COMPUTE_CAPABILITIES, by default TF_CUDA_COMPUTE_CAPABILITIES is "7.0,7.5,8.0,8.6" (CIBUILD use A10 card).
+
+For example, if you want to run DeepRec on H100 and A100 GPU card, please setup TF_CUDA_COMPUTE_CAPABILITIES as follows:
 
 
 ```bash
-export TF_CUDA_COMPUTE_CAPABILITIES="7.5,8.0"
+export TF_CUDA_COMPUTE_CAPABILITIES="8.0,8.6,9.0"
 ```
 
 **Configuration**

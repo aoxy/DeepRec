@@ -18,6 +18,7 @@ limitations under the License.
 
 #include "tensorflow/core/framework/embedding/embedding_config.h"
 #include "tensorflow/core/framework/embedding/filter_policy.h"
+#include "tensorflow/core/framework/embedding/intra_thread_copy_id_allocator.h"
 
 namespace tensorflow {
 
@@ -30,9 +31,13 @@ const static std::vector<int64> default_seeds = {
 
 template<typename K, typename V, typename EV>
 class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
+ using FilterPolicy<K, V, EV>::ev_;
+ using FilterPolicy<K, V, EV>::config_;
+
  public:
-  BloomFilterPolicy(const EmbeddingConfig& config, EV* ev)
-      : config_(config), ev_(ev) {
+  BloomFilterPolicy(const EmbeddingConfig& config, EV* ev) :
+      FilterPolicy<K, V, EV>(config, ev) {
+    
     switch (config_.counter_type){
       case DT_UINT64:
         VLOG(2) << "The type of bloom counter is uint64";
@@ -57,10 +62,116 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
     GenerateSeed(config.kHashFunc);
   }
 
-  Status Lookup(EV* ev, K key, V* val, const V* default_value_ptr,
+  Status Lookup(K key, V* val, const V* default_value_ptr,
       const V* default_value_no_permission) override {
-    return errors::Unimplemented("Can't use CBF filter in EV for inference.");
+    ValuePtr<V>* value_ptr = nullptr;
+    Status s = ev_->LookupKey(key, &value_ptr);
+    if (s.ok()) {
+      V* mem_val = ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
+      memcpy(val, mem_val, sizeof(V) * ev_->ValueLen());
+    } else {
+      memcpy(val, default_value_no_permission, sizeof(V) * ev_->ValueLen());
+    }
+    return Status::OK();
   }
+
+#if GOOGLE_CUDA
+  void BatchLookup(const EmbeddingVarContext<GPUDevice>& ctx,
+                   const K* keys, V* output,
+                   int64 num_of_keys,
+                   V* default_value_ptr,
+                   V* default_value_no_permission) override {
+    std::vector<ValuePtr<V>*> value_ptr_list(num_of_keys, nullptr);
+    ev_->BatchLookupKey(ctx, keys, value_ptr_list.data(), num_of_keys);
+    std::vector<V*> embedding_ptr(num_of_keys, nullptr);
+    auto do_work = [this, value_ptr_list, &embedding_ptr,
+                    default_value_ptr, default_value_no_permission]
+        (int64 start, int64 limit) {
+      for (int i = start; i < limit; i++) {
+        ValuePtr<V>* value_ptr = value_ptr_list[i];
+        if (value_ptr != nullptr) {
+          embedding_ptr[i] =
+              ev_->LookupOrCreateEmb(value_ptr, default_value_ptr);
+        } else {
+          embedding_ptr[i] = default_value_no_permission;
+        }
+      }
+    };
+    auto worker_threads = ctx.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, num_of_keys,
+          1000, do_work);
+    auto stream = ctx.compute_stream;
+    auto event_mgr = ctx.event_mgr;
+    ev_->CopyEmbeddingsToBuffer(
+        output, num_of_keys, embedding_ptr.data(),
+        stream, event_mgr, ctx.gpu_device);
+  }
+
+  void BatchLookupOrCreateKey(const EmbeddingVarContext<GPUDevice>& ctx,
+                              const K* keys, ValuePtr<V>** value_ptrs_list,
+                              int64 num_of_keys) {
+    int num_worker_threads = ctx.worker_threads->num_threads;
+    std::vector<std::vector<K>> lookup_or_create_ids(num_worker_threads);
+    std::vector<std::vector<int>>
+        lookup_or_create_cursor(num_worker_threads);
+    std::vector<std::vector<ValuePtr<V>*>>
+        lookup_or_create_ptrs(num_worker_threads);
+    IntraThreadCopyIdAllocator thread_copy_id_alloc(num_worker_threads);
+    std::vector<std::list<int64>>
+        not_found_cursor_list(num_worker_threads + 1);
+    uint64 main_thread_id = Env::Default()->GetCurrentThreadId();
+
+    auto do_work = [this, keys, value_ptrs_list,
+                    &lookup_or_create_ids,
+                    &lookup_or_create_ptrs,
+                    &lookup_or_create_cursor,
+                    main_thread_id,
+                    &thread_copy_id_alloc]
+         (int64 start, int64 limit) {
+      int copy_id =
+          thread_copy_id_alloc.GetCopyIdOfThread(main_thread_id);
+      for (int i = start; i < limit; i++) {
+        if (GetBloomFreq(keys[i]) >= config_.filter_freq) {
+          lookup_or_create_ids[copy_id].emplace_back(keys[i]);
+          lookup_or_create_ptrs[copy_id].emplace_back(value_ptrs_list[i]);
+          lookup_or_create_cursor[copy_id].emplace_back(i);
+        } else {
+          AddFreq(keys[i], 1);
+        }
+      }
+    };
+    auto worker_threads = ctx.worker_threads;
+    Shard(worker_threads->num_threads,
+          worker_threads->workers, num_of_keys,
+          1000, do_work);
+
+    std::vector<K> total_ids(num_of_keys);
+    std::vector<ValuePtr<V>*> total_ptrs(num_of_keys);
+    std::vector<int> total_cursors(num_of_keys);
+    int num_of_admit_id = 0;
+    for (int i = 0; i < num_worker_threads; i++) {
+      if (lookup_or_create_ids[i].size() > 0) {
+        memcpy(total_ids.data() + num_of_admit_id,
+               lookup_or_create_ids[i].data(),
+               sizeof(K) * lookup_or_create_ids[i].size());
+        memcpy(total_ptrs.data() + num_of_admit_id,
+               lookup_or_create_ptrs[i].data(),
+               sizeof(ValuePtr<V>*) * lookup_or_create_ptrs[i].size());
+        memcpy(total_cursors.data() + num_of_admit_id,
+               lookup_or_create_cursor[i].data(),
+               sizeof(int) * lookup_or_create_cursor[i].size());
+        num_of_admit_id += lookup_or_create_ids[i].size();
+      }
+    }
+
+    ev_->BatchLookupOrCreateKey(ctx, total_ids.data(), total_ptrs.data(),
+                                num_of_keys, not_found_cursor_list);
+    for (int i = 0; i < total_ptrs.size(); i++) {
+      value_ptrs_list[total_cursors[i]] = total_ptrs[i];
+    }
+  }
+#endif //GOOGLE_CUDA
 
   void LookupOrCreate(K key, V* val, const V* default_value_ptr,
                       ValuePtr<V>** value_ptr, int count,
@@ -76,12 +187,14 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
   }
 
   Status LookupOrCreateKey(K key, ValuePtr<V>** val,
-      bool* is_filter) override {
-    if (GetFreq(key, *val) >= config_.filter_freq) {
+      bool* is_filter, int64 count) override {
+    *val = nullptr;
+    if ((GetFreq(key, *val) + count) >= config_.filter_freq) {
       *is_filter = true;
       return ev_->LookupOrCreateKey(key, val);
     }
     *is_filter = false;
+    AddFreq(key, count);
     return Status::OK();
   }
 
@@ -95,6 +208,14 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
 
   void* GetBloomCounter() const {
     return bloom_counter_;
+  }
+
+  bool is_admit(K key, ValuePtr<V>* value_ptr) override {
+    if (value_ptr == nullptr) {
+      return false;
+    } else {
+      return GetFreq(key, value_ptr) >= config_.filter_freq;
+    }
   }
 
  private:
@@ -186,16 +307,18 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
     }
   }
 
-  Status Import(RestoreBuffer& restore_buff,
-                int64 key_num,
-                int bucket_num,
-                int64 partition_id,
-                int64 partition_num,
-                bool is_filter) override {
+  Status Restore(int64 key_num, int bucket_num, int64 partition_id,
+                 int64 partition_num, int64 value_len, bool is_filter,
+                 bool to_dram, bool is_incr, RestoreBuffer& restore_buff) override {
     K* key_buff = (K*)restore_buff.key_buffer;
     V* value_buff = (V*)restore_buff.value_buffer;
     int64* version_buff = (int64*)restore_buff.version_buffer;
     int64* freq_buff = (int64*)restore_buff.freq_buffer;
+    if (to_dram) {
+      LOG(FATAL)<<"BloomFilter dosen't support ImportToDRAM";
+      return Status::OK();
+    }
+
     for (auto i = 0; i < key_num; ++i) {
       // this can describe by graph(Mod + DynamicPartition),
       // but memory waste and slow
@@ -216,33 +339,19 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
         SetBloomFreq(key_buff[i], freq_buff[i]);
       }
       if (new_freq >= config_.filter_freq){
-        ev_->CreateKey(key_buff[i], &value_ptr);
+        ev_->CreateKey(key_buff[i], &value_ptr, to_dram);
         if (config_.steps_to_live != 0 || config_.record_version) {
           value_ptr->SetStep(version_buff[i]);
         }
         if (!is_filter){
           ev_->LookupOrCreateEmb(value_ptr,
-              value_buff + i * ev_->ValueLen());
+                                 value_buff + i * ev_->ValueLen());
         } else {
           ev_->LookupOrCreateEmb(value_ptr,
-              ev_->GetDefaultValue(key_buff[i]));
+                                 ev_->GetDefaultValue(key_buff[i]));
         }
       }
     }
-    if (ev_->IsMultiLevel() && !ev_->IsUseHbm() && config_.is_primary()) {
-      ev_->UpdateCache(key_buff, key_num, version_buff, freq_buff);
-    }
-    return Status::OK();
-  }
-
-  Status ImportToDram(RestoreBuffer& restore_buff,
-                int64 key_num,
-                int bucket_num,
-                int64 partition_id,
-                int64 partition_num,
-                bool is_filter,
-                V* default_values) override {
-    LOG(FATAL)<<"BloomFilter dosen't support ImportToDRAM";
     return Status::OK();
   }
 
@@ -338,11 +447,8 @@ class BloomFilterPolicy : public FilterPolicy<K, V, EV> {
       }
     }
   }
-
  private:
   void* bloom_counter_;
-  EmbeddingConfig config_;
-  EV* ev_;
   std::vector<int64> seeds_;
 };
 } // tensorflow

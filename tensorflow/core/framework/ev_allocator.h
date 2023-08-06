@@ -18,6 +18,7 @@ limitations under the License.
 #include <atomic>
 #include <list>
 #include <vector>
+#include <readerwriterqueue.h>
 #include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/allocator_registry.h"
 #include "tensorflow/core/framework/tracking_allocator.h"
@@ -26,11 +27,12 @@ limitations under the License.
 #include "tensorflow/core/lib/strings/stringprintf.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/util/env_var.h"
 
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
-#define ARENA_ARRAY_SIZE 1024
+#define ARENA_ARRAY_SIZE 128
 
 namespace tensorflow {
 
@@ -163,24 +165,56 @@ class FreeList {
   }
 
   int PopBatch(int N, void** ret) {
-    if (list_.size() >= N) {
-      for (int i = 0; i < N; ++i) {
-        ret[i] = list_.back();
-        list_.pop_back();
-      }
-      return N;
-    } else {
-      auto loop = list_.size();
-      for (int i = 0; i < loop; ++i) {
-        ret[i] = list_.back();
-        list_.pop_back();
-      }
-      return loop;
+    int count = list_.size();
+    if (count > N) {
+      count = N;
     }
+    for (int i = 0; i < count; ++i) {
+      ret[i] = list_.back();
+      list_.pop_back();
+    }
+
+    return count;
   }
 
  private:
   std::list<void*> list_;
+};
+
+class FreeQueue {
+ public:
+  void Push(void* ptr) {
+    q_.enqueue(ptr);
+  }
+
+  bool TryPop(void** ret) {
+    return q_.try_dequeue(*ret);
+  }
+
+  // PushBatch and PopBatch do not guarantee an ordering.
+  void PushBatch(int N, void** ptrs) {
+    for (int i = 0; i < N; ++i) {
+      q_.enqueue(ptrs[i]);
+    }
+  }
+
+  int PopBatch(int N, void** ret) {
+    int pop_count = 0;
+    while (pop_count < N) {
+      bool succeeded = q_.try_dequeue(ret[pop_count]);
+      if (!succeeded) {
+        break;
+      }
+      ++pop_count;
+    }
+
+    return pop_count;
+  }
+
+ private:
+  // NOTE(TODO): Consider to use concurrentqueue instead,
+  // that we can delete mutex in Bin.
+  moodycamel::ReaderWriterQueue<void*> q_;
 };
 
 template<typename ChunkType>
@@ -266,7 +300,7 @@ class Bin {
 
   size_t BatchAllocate(size_t num, void** ret) {
     mutex_lock l(mu_);
-    auto allocated = free_list_.PopBatch(num, ret);
+    auto allocated = free_queue_.PopBatch(num, ret);
     auto remains = num - allocated;
     if (remains == 0) {
       return num;
@@ -304,7 +338,7 @@ class Bin {
 
   void BatchDeallocate(std::vector<void *> &ptrs) {
     mutex_lock l(mu_);
-    free_list_.PushBatch(ptrs.size(), ptrs.data());
+    free_queue_.PushBatch(ptrs.size(), ptrs.data());
   }
 
   size_t BinSize() const {
@@ -325,7 +359,7 @@ class Bin {
   PageMap<ChunkType>* page_map_ = nullptr GUARDED_BY(mu_);
   Chunk<ChunkType>* current_chunk_ = nullptr GUARDED_BY(mu_);
 
-  FreeList free_list_ GUARDED_BY(mu_);
+  FreeQueue free_queue_ GUARDED_BY(mu_);
   std::vector<Chunk<ChunkType>*> chunks_ GUARDED_BY(mu_);
 };
 
@@ -354,7 +388,7 @@ class Arena {
         bin = it->second;
       }
     }
-    
+
     return bin->BatchAllocate(num, ret);
   }
 
@@ -432,7 +466,7 @@ class ThreadLocalBin {
     }
   }
 
-private:
+ private:
   void FlushBackToArena(int num) {
     std::unordered_map<Bin<ChunkType>*, std::vector<void *>> bin_ptr_map;
     for (int i = 0; i < num; i++) {
@@ -447,7 +481,7 @@ private:
     }
   }
 
-private:
+ private:
   size_t t_bin_size_;
   PageMap<ChunkType> *page_map_ = nullptr; // not owned
   Arena<ChunkType> *arena_ = nullptr; // not owned
@@ -511,9 +545,17 @@ class EVAllocatorImpl {
     pthread_key_create(&key_, ThreadLocalCacheCleanup);
     page_map_ = new PageMap<ChunkType>();
     page_map_->Init();
-    arenas_ = new std::vector<Arena<ChunkType>>(ARENA_ARRAY_SIZE, page_map_);
+
+    int64 arena_array_size = ARENA_ARRAY_SIZE;
+    Status s = ReadInt64FromEnvVar("ARENA_ARRAY_SIZE",
+        ARENA_ARRAY_SIZE, &arena_array_size);
+    if (!s.ok()) {
+      LOG(ERROR) << "Read ARENA_ARRAY_SIZE env error: " << s.error_message();
+    }
+    LOG(INFO) << "EVAllocator set arena array size: " << arena_array_size;
+
+    arenas_ = new std::vector<Arena<ChunkType>>(arena_array_size, page_map_);
     arena_cur_index = 0;
-    
   }
 
   ~EVAllocatorImpl() {
