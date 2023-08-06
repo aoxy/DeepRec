@@ -1982,7 +1982,7 @@ TEST(EmbeddingVariableTest, TestCacheTaoBaoBatch) {
   size_t num_ids = 0;
   size_t capacity = 0;
   size_t batch_size = 128;
-  std::vector<size_t> thread_nums = {2, 4, 7, 11, 16};
+  std::vector<size_t> thread_nums = {2, 4, 6, 8, 10, 12, 14, 16};
   std::vector<size_t> way_nums = {8, 16, 32};
   dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, num_ids);
   LOG(INFO) << "Taobao dataset loaded! length = " << dl.ids.size();
@@ -2009,7 +2009,7 @@ TEST(EmbeddingVariableTest, TestCacheTaoBaoNoEvicBatch) {
   size_t num_ids = 0;
   size_t capacity = 0;
   size_t batch_size = 128;
-  std::vector<size_t> thread_nums = {1, 2, 5, 10, 16};
+  std::vector<size_t> thread_nums = {2, 4, 6, 8, 10, 12, 14, 16};
   std::vector<size_t> way_nums = {8, 16, 32};
   dataloder dl("/home/code/aoxy/dataset/raw_sample.csv", 0, num_ids);
   LOG(INFO) << "Taobao dataset loaded! length = " << dl.ids.size();

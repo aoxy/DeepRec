@@ -606,7 +606,8 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    __sync_fetch_and_add(&size_, batch_insert);
+    __sync_fetch_and_add(&size_, batch_miss);
+    // TODO: Use environment variables to control the granularity of updates, per Batch or per ID
     __sync_fetch_and_add(&this->num_hit, batch_hit);
     __sync_fetch_and_add(&this->num_miss, batch_miss);
   }
