@@ -269,6 +269,134 @@ class LRUCache : public BatchCache<K> {
 };
 
 template <class K>
+class BlockLockLFUCache : public BatchCache<K> {
+ public:
+  BlockLockLFUCache(size_t capacity, size_t way)
+      : evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
+    block_count_ = capacity_ / way_;
+    for (size_t i = 0; i < block_count_; i++) {
+      cache_.emplace_back(new CacheBlock(way_));
+    }
+    BatchCache<K>::num_hit = 0;
+    BatchCache<K>::num_miss = 0;
+  }
+
+  size_t size() { return size_; }
+
+  size_t get_evic_ids(K* evic_ids, size_t k_size) {
+    size_t true_size = 0;
+    for (size_t i = 0; i < block_count_; i++) {
+      mutex_lock l((*cache_[evic_idx_]).mtx_evic);
+      while (true_size < k_size && !(*cache_[evic_idx_]).evic_buffer.empty()) {
+        evic_ids[true_size++] = *(*cache_[evic_idx_]).evic_buffer.end();
+        (*cache_[evic_idx_]).evic_buffer.pop_back();
+      }
+      evic_idx_ = (evic_idx_ + 1) % block_count_;
+    }
+    __sync_fetch_and_sub(&size_, true_size);
+    return true_size;
+  }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                   bool use_locking=true) {
+    bool found;
+    bool insert;
+    int batch_hit = 0;
+    int batch_miss = 0;
+    int batch_insert = 0;
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      size_t block_idx = id % block_count_;
+      found = false;
+      mutex_lock l((*cache_[block_idx]).mtx_cache);
+      for (size_t j = 0; j < way_; ++j) {
+        if (id == (*cache_[block_idx]).cache_block[j].id) {
+          found = true;
+          (*cache_[block_idx]).cache_block[j].count++;
+          batch_hit++;
+        }
+      }
+      if (!found) {
+        batch_miss++;
+        insert = false;
+        size_t min_j = 0;
+        size_t min_count = (*cache_[block_idx]).cache_block[min_j].count;
+        for (size_t j = 0; j < way_; ++j) {
+          if (-1 == (*cache_[block_idx]).cache_block[j].id) {
+            insert = true;
+            batch_insert++;
+            (*cache_[block_idx]).cache_block[j].id = id;
+            (*cache_[block_idx]).cache_block[j].count = 1;
+            break;
+          }
+          if (min_count > (*cache_[block_idx]).cache_block[j].count) {
+            min_count = (*cache_[block_idx]).cache_block[j].count;
+            min_j = j;
+          }
+        }
+        if (!insert) {
+          {
+            mutex_lock l((*cache_[block_idx]).mtx_evic);
+            (*cache_[block_idx])
+                .evic_buffer.push_back(
+                    (*cache_[block_idx]).cache_block[min_j].id);
+          }
+
+          (*cache_[block_idx]).cache_block[min_j].id = id;
+          (*cache_[block_idx]).cache_block[min_j].count = 1;
+        }
+      }
+    }
+    __sync_fetch_and_add(&size_, batch_miss);
+    // TODO: Use environment variables to control the granularity of updates, per Batch or per ID
+    __sync_fetch_and_add(&this->num_hit, batch_hit);
+    __sync_fetch_and_add(&this->num_miss, batch_miss);
+  }
+
+  size_t get_cached_ids(K* cached_ids, size_t k_size,
+                        int64* cached_versions,
+                        int64* cached_freqs) override { }
+
+  void add_to_rank(const K* batch_ids, size_t batch_size,
+                    const int64* batch_version,
+                    const int64* batch_freqs,
+                    bool use_locking = true) { }
+
+  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) { }
+
+  void add_to_cache(const K* batch_ids, const size_t batch_size) { }
+
+ private:
+  class BlockNode {
+   public:
+    K id;
+    size_t count;
+    BlockNode(K id) : id(id), count(0) {}
+    BlockNode() : id(-1), count(0) {}
+    // BlockNode(BlockNode &) = delete;
+    // BlockNode &operator=(BlockNode &) = delete;
+  };
+  class CacheBlock {
+   public:
+    std::vector<BlockNode> cache_block;
+    std::vector<K> evic_buffer;
+    mutex mtx_cache;
+    mutex mtx_evic;
+    CacheBlock(size_t way) { cache_block.resize(way); }
+    CacheBlock() = delete;
+    CacheBlock(CacheBlock&) = delete;
+    CacheBlock& operator=(CacheBlock&) = delete;
+  };
+
+  std::vector<CacheBlock*> cache_;
+  size_t block_count_;
+  size_t evic_idx_;
+  size_t way_;
+  size_t capacity_;
+  size_t size_;
+};
+
+template <class K>
 class LFUCache : public BatchCache<K> {
  public:
   LFUCache() {
