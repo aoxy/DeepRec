@@ -40,6 +40,11 @@ enum SlotType {
 enum CacheStrategy {
   LRU = 0;
   LFU = 1;
+  B4LFU = 2;
+  B8LFU = 3;
+  B16LFU = 4;
+  B32LFU = 5;
+  B64LFU = 6;
 }
 
 enum EmbeddingVariableType {

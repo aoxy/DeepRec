@@ -471,5 +471,122 @@ TEST(EmbeddingVariablePerformaceTest, TestCounterFilterLookupOrCreate) {
     }
   }
 }
+
+double PerfMultiTierLookupOrCreate(
+    const std::vector<std::vector<int64>>& input_batches,
+    int num_thread, int filter_freq = 0,
+    CacheStrategy cache_strategy=CacheStrategy::LFU) {
+  int value_size = 32;
+  int64 default_value_dim = 4096;
+  Tensor default_value(DT_FLOAT, TensorShape({default_value_dim, value_size}));
+  auto default_value_matrix = default_value.matrix<float>();
+	for (int i = 0; i < default_value_dim; i++) {
+		for (int j = 0 ; j < value_size; j++) {
+			default_value_matrix(i, j) = i * value_size + j;
+		}
+	}
+  auto ev = CreateMultiTierEmbeddingVar(value_size, default_value,
+                               default_value_dim, 0, 100, -1.0, cache_strategy);
+  std::vector<std::thread> worker_threads(num_thread);
+  double total_time = 0.0;
+  timespec start, end;
+  for (int k = 0; k < input_batches.size(); k++) {
+    //Allocate Outputs for each batch
+    std::vector<float*> outputs(input_batches[k].size());
+    for (int i = 0; i < outputs.size(); i++) {
+      outputs[i] =
+          (float*)cpu_allocator()->AllocateRaw(0, sizeof(float) * value_size);
+    }
+    //Execution
+    std::vector<std::pair<int, int>> thread_task_range(num_thread);
+    for (int i = 0; i < num_thread; i++) {
+      int st = input_batches[k].size() / num_thread * i;
+      int ed = input_batches[k].size() / num_thread * (i + 1);
+      ed = (ed > input_batches[k].size()) ? input_batches[k].size() : ed;
+      thread_task_range[i].first = st;
+      thread_task_range[i].second = ed;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (int i = 0; i < num_thread; i++) {
+      worker_threads[i] = std::thread(thread_lookup_or_create,
+                                      ev, input_batches[k].data(),
+                                      outputs.data(), value_size,
+                                      thread_task_range[i].first,
+                                      thread_task_range[i].second);
+    }
+    for (int i = 0; i < num_thread; i++) {
+      worker_threads[i].join();
+    }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    if (k > 10)
+      total_time += ((double)(end.tv_sec - start.tv_sec) *
+                     1000000000 + end.tv_nsec - start.tv_nsec);
+    //Check
+    for (int i = 0; i < input_batches[k].size(); i++) {
+      int64 key =  input_batches[k][i];
+      float* output = outputs[i];
+      for (int j = 0; j < value_size; j++) {
+        float val = default_value_matrix(key % default_value_dim, j);
+        if (output[j] != val) {
+          LOG(INFO)<<"Value Error: outputs["<<key<<"]["<<j
+                    <<"] is "<<output[j]<<", while the anwser is "<<val;
+          return -1.0;
+        }
+      }
+    }
+    //Deallocate Output
+    for (auto ptr: outputs) {
+      cpu_allocator()->DeallocateRaw(ptr);
+    }
+  }
+  ev->Unref();
+  return total_time;
+}
+
+void TestMultiTierLookupOrCreateCache(std::string title,
+                                      CacheStrategy cache_strategy) {
+  int num_of_batch = 100;
+  int batch_size = 1024 * 128;
+  int num_of_ids = 5000000;
+  std::vector<std::vector<int64>> input_batches(num_of_batch);
+  for (int i = 0; i < num_of_batch; i++) {
+    input_batches[i].resize(batch_size);
+  }
+  LOG(INFO) << title << " Start generating skew input";
+  GenerateSkewInput(num_of_ids, 0.8, input_batches);
+  
+  std::set<int64> uids;
+  for (int i = 0; i < num_of_batch; i++) {
+    for (size_t j = 0; j < input_batches[i].size(); j++) {
+      uids.insert(input_batches[i][j]);
+    }
+  }
+  LOG(INFO) << title << " Unique id count = " << uids.size();
+
+  LOG(INFO) << title << " Finish generating skew input";
+  std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
+  for (auto num_thread : num_thread_vec) {
+    LOG(INFO) << title << " Test MultiTierLookupOrCreate With " << num_thread
+              << " threads.";
+    double exec_time = PerfMultiTierLookupOrCreate(input_batches, num_thread, 0,
+                                                   cache_strategy);
+    if (exec_time == -1.0) {
+      LOG(INFO) << title << " Test Failed";
+    } else {
+      LOG(INFO) << title << " Performance of MultiTierLookupOrCreate With "
+                << num_thread << " threads: " << exec_time / 1000000 << " ms";
+    }
+  }
+}
+
+TEST(EmbeddingVariablePerformanceTest, TestMultiTierLookupOrCreate) {
+  TestMultiTierLookupOrCreateCache("LRU", CacheStrategy::LRU);
+  TestMultiTierLookupOrCreateCache("LFU", CacheStrategy::LFU);
+  // TestMultiTierLookupOrCreateCache("BLFU(4)", CacheStrategy::B4LFU);
+  // TestMultiTierLookupOrCreateCache("BLFU(8)", CacheStrategy::B8LFU);
+  // TestMultiTierLookupOrCreateCache("BLFU(16)", CacheStrategy::B16LFU);
+  // TestMultiTierLookupOrCreateCache("BLFU(32)", CacheStrategy::B32LFU);
+  // TestMultiTierLookupOrCreateCache("BLFU(64)", CacheStrategy::B64LFU);
+}
 } //namespace embedding
 } //namespace tensorflow

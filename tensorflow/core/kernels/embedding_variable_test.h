@@ -139,6 +139,39 @@ EmbeddingVar<int64, float>* CreateEmbeddingVar(
 	ev->Init(default_value, default_value_dim);
   return ev;
 }
+
+EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
+    int value_size, Tensor& default_value,
+    int64 default_value_dim, int64 filter_freq = 0,
+    int64 steps_to_live = 0,
+    float l2_weight_threshold=-1.0,
+    CacheStrategy cache_strategy=CacheStrategy::LFU) {
+  std::string layout_type = "normal";
+  if (steps_to_live != 0 && filter_freq == 0) {
+    layout_type = "normal_contiguous";
+  }
+  auto embedding_config = EmbeddingConfig(
+			0, 0, 1, 0, "emb_var", steps_to_live,
+			filter_freq, 999999, l2_weight_threshold, layout_type,
+			0, -1.0, DT_UINT64, default_value_dim,
+			0.0, false, false, false);
+  auto storage =
+      embedding::StorageFactory::Create<int64, float>(
+          embedding::StorageConfig(
+              embedding::StorageType::DRAM_SSDHASH, "",
+              {1024 * 1024 * 52, 1024, 1024, 1024}, layout_type,
+              embedding_config, cache_strategy),
+          cpu_allocator(),
+          "emb_var");
+	auto ev = new EmbeddingVar<int64, float>(
+      "emb_var",
+      storage,
+      embedding_config,
+      cpu_allocator());
+	ev->Init(default_value, default_value_dim);
+  ev->InitCache(cache_strategy);
+  return ev;
+}
 } //namespace embedding
 } //namespace tensorflow
 #endif // TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_STORAGE_FACTORY_H_

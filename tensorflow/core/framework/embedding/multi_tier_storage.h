@@ -49,6 +49,7 @@ class MultiTierStorage : public Storage<K, V> {
       : Storage<K, V>(sc), name_(name) {}
 
   virtual ~MultiTierStorage() {
+    LOG(INFO) << cache_->DebugString();
     delete cache_;
   }
 
@@ -61,6 +62,8 @@ class MultiTierStorage : public Storage<K, V> {
     Storage<K, V>::alloc_len_ = Storage<K, V>::ComputeAllocLen(value_len);
 
     int64 temp = Storage<K, V>::alloc_len_ * slot_num;
+    LOG(INFO) << "Enter -----> SetAllocLen -> temp = " << temp;
+    LOG(INFO) << "Enter -----> SetAllocLen -> Storage<K, V>::total_dims_ = " << Storage<K, V>::total_dims_;
     if (temp > Storage<K, V>::total_dims_) {
       Storage<K, V>::total_dims_ = temp;
       SetTotalDims(Storage<K, V>::total_dims_);
@@ -81,7 +84,8 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   void InitCache(embedding::CacheStrategy cache_strategy) override {
-    cache_ = CacheFactory::Create<K>(cache_strategy, name_);
+    LOG(INFO) << "Enter -----> InitCache -> cache_capacity_ = " << cache_capacity_;
+    cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_);
     eviction_manager_ = EvictionManagerCreator::Create<K, V>();
     eviction_manager_->AddStorage(this);
     cache_thread_pool_ = CacheThreadPoolCreator::Create();
@@ -227,11 +231,13 @@ class MultiTierStorage : public Storage<K, V> {
   void UpdateCache(const Tensor& indices,
                    const Tensor& indices_counts) override {
     Schedule([this, indices, indices_counts]() {
+    LOG(INFO) << "Enter -----> UpdateCache1";
       cache_->update(indices, indices_counts);
     });
   }
 
   void UpdateCache(const Tensor& indices) override {
+    LOG(INFO) << "Enter -----> UpdateCache2";
     Schedule([this, indices]() {
       cache_->update(indices);
     });
@@ -242,12 +248,14 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   void AddToCachePrefetchList(const Tensor& indices) override {
+    LOG(INFO) << "Enter -----> AddToCachePrefetchList";
     Schedule([this, indices]() {
       cache_->add_to_prefetch_list(indices);
     });
   }
 
   void AddToCache(const Tensor& indices) override {
+    LOG(INFO) << "Enter -----> AddToCache";
     Schedule([this, indices]() {
       cache_->add_to_cache(indices);
     });
