@@ -274,8 +274,9 @@ class BlockLockLFUCache : public BatchCache<K> {
   BlockLockLFUCache(size_t capacity, size_t way)
       : evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
     block_count_ = capacity_ / way_;
+    cache_.resize(block_count_);
     for (size_t i = 0; i < block_count_; i++) {
-      cache_.emplace_back(new CacheBlock(way_));
+      cache_[i] = new CacheBlock(way_);
     }
     BatchCache<K>::num_hit = 0;
     BatchCache<K>::num_miss = 0;
@@ -297,7 +298,7 @@ class BlockLockLFUCache : public BatchCache<K> {
     return true_size;
   }
 
-  void add_to_rank(const K* batch_ids, size_t batch_size,
+  void update(const K* batch_ids, size_t batch_size,
                    bool use_locking=true) {
     bool found;
     bool insert;
@@ -357,10 +358,12 @@ class BlockLockLFUCache : public BatchCache<K> {
                         int64* cached_versions,
                         int64* cached_freqs) override { }
 
-  void add_to_rank(const K* batch_ids, size_t batch_size,
+  void update(const K* batch_ids, size_t batch_size,
                     const int64* batch_version,
                     const int64* batch_freqs,
-                    bool use_locking = true) { }
+                    bool use_locking = true) override {
+    update(batch_ids, batch_size);
+  }
 
   void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) { }
 
@@ -373,8 +376,6 @@ class BlockLockLFUCache : public BatchCache<K> {
     size_t count;
     BlockNode(K id) : id(id), count(0) {}
     BlockNode() : id(-1), count(0) {}
-    // BlockNode(BlockNode &) = delete;
-    // BlockNode &operator=(BlockNode &) = delete;
   };
   class CacheBlock {
    public:

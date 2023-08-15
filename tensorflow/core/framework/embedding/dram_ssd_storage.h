@@ -82,6 +82,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
 
   Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
       size_t size) override {
+    this->cache_->update(&key, 1);
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
       return s;
