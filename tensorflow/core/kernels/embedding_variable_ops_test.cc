@@ -1844,7 +1844,106 @@ TEST(EmbeddingVariableTest, TestLookupRemoveConcurrency) {
    for (auto &t : insert_threads) {
      t.join();
    }
- }
+}
+
+TEST(EmbeddingVariableTest, TestBLFUCachePrefetch) {
+  BatchCache<int64>* cache = new BlockLockLFUCache<int64>(10, 8);
+  int num_ids = 5;
+  std::vector<int64> prefetch_ids;
+  int index = 0;
+  int64 true_evict_size;
+  int64* evict_ids = new int64[num_ids];
+  std::vector<int64> access_seq;
+  for(int i = 1; i <= num_ids; i++) {
+    for (int j = 0; j < i; j++) {
+      prefetch_ids.emplace_back(i);
+    }
+  }
+  cache->add_to_prefetch_list(prefetch_ids.data(), prefetch_ids.size());
+  ASSERT_EQ(cache->size(), 0);
+  true_evict_size = cache->get_evic_ids(evict_ids, num_ids);
+  ASSERT_EQ(true_evict_size, 0);
+  for (int i = 1; i <= 2; i++) {
+    for (int j = 0; j < i; j++) {
+      access_seq.emplace_back(i);
+    }
+  }
+  LOG(INFO) << "Enter -----> access_seq.size() = " << access_seq.size();
+  cache->add_to_cache(access_seq.data(), access_seq.size());
+  ASSERT_EQ(cache->size(), 2);
+  true_evict_size = cache->get_evic_ids(evict_ids, num_ids);
+  ASSERT_EQ(true_evict_size, 2);
+  access_seq.clear();
+  for (int i = 5; i >= 3; i--) {
+    for (int j = 0; j < i; j++) {
+      access_seq.emplace_back(i);
+    }
+  }
+  cache->add_to_cache(access_seq.data(), access_seq.size());
+  ASSERT_EQ(cache->size(), 3);
+  true_evict_size = cache->get_evic_ids(evict_ids, 2);
+  ASSERT_EQ(evict_ids[0], 3);
+  ASSERT_EQ(evict_ids[1], 4);
+  ASSERT_EQ(cache->size(), 1);
+
+  delete cache;
+  delete[] evict_ids;
+}
+
+TEST(EmbeddingVariableTest, TestBLFUCache) {
+  BatchCache<int64>* cache = new BlockLockLFUCache<int64>(200, 8);
+  int num_ids = 30;
+  int num_access = 100;
+  int num_evict = 50;
+  size_t block_count_ = 200 / 8;
+  int64 ids[num_access] = {0};
+  int64 evict_ids[num_evict] = {0};
+  for (int i = 0; i < num_access; i++){
+    ids[i] = i % num_ids;
+  }
+  cache->update(ids, num_access);
+  int64 size = cache->get_evic_ids(evict_ids, num_evict);
+  ASSERT_EQ(size, num_ids);
+  ASSERT_EQ(cache->size(), 0);
+  for (int i = 0; i < size; i++) {
+    if (i < 5) {
+      ASSERT_EQ(evict_ids[i], i + block_count_);
+    } else if (i < 25) {
+      ASSERT_EQ(evict_ids[i], i);
+    } else{
+      ASSERT_EQ(evict_ids[i], i - block_count_);
+    }
+    
+  }
+}
+
+TEST(EmbeddingVariableTest, TestBLFUCacheGetCachedIds) {
+  BatchCache<int64>* cache = new BlockLockLFUCache<int64>(200, 8);
+  int num_ids = 30;
+  int num_access = 100;
+  int num_evict = 15;
+  int num_cache = 20;
+  int64 ids[num_access] = {0};
+  int64 evict_ids[num_evict] = {0};
+  for (int i = 0; i < num_access; i++){
+    ids[i] = i % num_ids;
+  }
+  cache->update(ids, num_access);
+  ASSERT_EQ(cache->size(), num_ids);
+  int64* cached_ids = new int64[num_cache];
+  int64* cached_freqs = new int64[num_cache];
+  int64 true_size = 
+      cache->get_cached_ids(cached_ids, num_cache, nullptr, cached_freqs);
+  ASSERT_EQ(true_size, 20);
+  cache->get_evic_ids(evict_ids, num_evict);
+  ASSERT_EQ(cache->size(), 15);
+  true_size =
+      cache->get_cached_ids(cached_ids, num_cache, nullptr, cached_freqs);
+  ASSERT_EQ(true_size, 15);
+  delete cache;
+  delete[] cached_ids;
+  delete[] cached_freqs;
+}
 
 } // namespace
 } // namespace embedding

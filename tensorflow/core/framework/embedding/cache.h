@@ -3,6 +3,7 @@
 #include <iostream>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <set>
 #include <list>
 #include <limits>
@@ -284,10 +285,56 @@ class BlockLockLFUCache : public BatchCache<K> {
   }
 
   size_t size() { return size_; }
+  
+  size_t get_cached_ids(K* cached_ids, size_t k_size,
+                        int64* cached_versions,
+                        int64* cached_freqs) override {
+    size_t true_size = 0;
+    size_t total_cached_size = 0;
+    std::unordered_set<K> cached_set;
+    for (size_t i = 0; true_size < k_size; ++i) {
+      CacheBlock& curr_block = *cache_[i % block_count_];
+      std::vector<CacheItem>& curr_cached = curr_block.cached;
+      size_t max_j = 0;
+      size_t max_count = 0;
+      mutex_lock l(curr_block.mtx_cached);
+      for (size_t j = 0; j < way_; ++j) {
+        if (curr_cached[j].id > 0 && !cached_set.count(curr_cached[j].id)) {
+          ++total_cached_size;
+          if (max_count < curr_cached[j].count) {
+            max_count = curr_cached[j].count;
+            max_j = j;
+          }
+        }
+      }
+      //==============================================(
+      std::cout << "CacheBlock[" << i << "]: " << " max_j = " << max_j << " ";
+      for (size_t j = 0; j < way_; ++j) {
+        std::cout << curr_cached[j].id << "(" << curr_cached[j].count << "), ";
+      }
+      std::cout << std::endl;
+      //==============================================)
+      K max_id = curr_cached[max_j].id;
+      if (max_id != -1 && !cached_set.count(max_id)) {
+        --total_cached_size;
+        cached_set.insert(max_id);
+        cached_ids[true_size] = max_id;
+        cached_freqs[true_size++] = curr_cached[max_j].count;
+        LOG(INFO) << "Enter -----> BlockLockLFUCache --> max_id = " << max_id << " true_size = " << true_size;
+      }
+      if ((i + 1) % block_count_ == 0) {
+        if (total_cached_size == 0) {
+          break;
+        }
+        total_cached_size = 0;
+      }
+    }
+    return true_size;
+  }
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
     size_t true_size = 0;
-    for (size_t i = 0; true_size < k_size && i < block_count_; i++) {
+    for (size_t i = 0; true_size < k_size && i < block_count_; ++i) {
       CacheBlock& curr_block = *cache_[evic_idx_];
       std::vector<K>& curr_evicted = curr_block.evicted;
       mutex_lock l(curr_block.mtx_evicted);
@@ -296,6 +343,53 @@ class BlockLockLFUCache : public BatchCache<K> {
         curr_evicted.pop_back();
       }
       evic_idx_ = (evic_idx_ + 1) % block_count_;
+    }
+    if (true_size < k_size) {
+      size_t total_cached_size = 0;
+      for (size_t i = 0; true_size < k_size; ++i) {
+        CacheBlock& curr_block = *cache_[i % block_count_];
+        std::vector<CacheItem>& curr_cached = curr_block.cached;
+        size_t min_j = 0;
+        size_t min_count = std::numeric_limits<size_t>::max();
+        mutex_lock l(curr_block.mtx_cached);
+        //==============================================(
+        std::cout << "CacheBlock[" << i << "]: ";
+        for (size_t j = 0; j < way_; ++j) {
+          std::cout << curr_cached[j].id << "(" << curr_cached[j].count << "), ";
+        }
+        std::cout << std::endl;
+        //==============================================)
+        for (size_t j = 0; j < way_; ++j) {
+          if (curr_cached[j].id != -1) {
+            ++total_cached_size;
+            if (min_count >= curr_cached[j].count) {
+              min_count = curr_cached[j].count;
+              min_j = j;
+            }
+          }
+        }
+        if (curr_cached[min_j].id != -1) {
+          --total_cached_size;
+          evic_ids[true_size++] = curr_cached[min_j].id;
+          LOG(INFO) << "Enter --> curr_cached[min_j].id = " << curr_cached[min_j].id;
+          curr_cached[min_j].id = -1;
+          curr_block.full = false;
+        }
+        //==============================================(
+        LOG(INFO) << "Enter --> min_j = " << min_j << " --> total_cached_size = " << total_cached_size;
+        std::cout << "CacheBlock[" << i << "]: ";
+        for (size_t j = 0; j < way_; ++j) {
+          std::cout << curr_cached[j].id << "(" << curr_cached[j].count << "), ";
+        }
+        std::cout << std::endl;
+        //==============================================)
+        if ((i + 1) % block_count_ == 0) {
+          if (total_cached_size == 0) {
+            break;
+          }
+          total_cached_size = 0;
+        }
+      }
     }
     __sync_fetch_and_sub(&size_, true_size);
     return true_size;
@@ -311,6 +405,7 @@ class BlockLockLFUCache : public BatchCache<K> {
     int batch_miss = 0;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
+      LOG(INFO) << "Enter -----> BlockLockLFUCache --> id = " << id;
       CacheBlock& curr_block = *cache_[id % block_count_];
       std::vector<CacheItem>& curr_cached = curr_block.cached;
       found = false;
@@ -338,7 +433,7 @@ class BlockLockLFUCache : public BatchCache<K> {
           curr_block.full = !insert;
         } else {
           min_j = 0;
-          min_count = curr_cached[0].count;
+          min_count = std::numeric_limits<size_t>::max();
           for (size_t j = 0; j < way_; ++j) {
             if (min_count > curr_cached[j].count) {
               min_count = curr_cached[j].count;
@@ -354,26 +449,126 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
+    LOG(INFO) << "Enter -----> BlockLockLFUCache --> batch_miss = " << batch_miss;
     __sync_fetch_and_add(&size_, batch_miss);
     // TODO: Use environment variables to control the granularity of updates, per Batch or per ID
     __sync_fetch_and_add(&this->num_hit, batch_hit);
     __sync_fetch_and_add(&this->num_miss, batch_miss);
   }
 
-  size_t get_cached_ids(K* cached_ids, size_t k_size,
-                        int64* cached_versions,
-                        int64* cached_freqs) override { }
-
   void update(const K* batch_ids, size_t batch_size,
                     const int64* batch_version,
                     const int64* batch_freqs,
                     bool use_locking = true) override {
-    update(batch_ids, batch_size);
+    bool found;
+    bool insert;
+    size_t min_j;
+    size_t min_count;
+    int batch_hit = 0;
+    int batch_miss = 0;
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      int64 freq = batch_freqs[i];
+      CacheBlock& curr_block = *cache_[id % block_count_];
+      std::vector<CacheItem>& curr_cached = curr_block.cached;
+      found = false;
+      mutex_lock l(curr_block.mtx_cached);
+      for (size_t j = 0; j < way_; ++j) {
+        if (id == curr_cached[j].id) {
+          found = true;
+          curr_cached[j].count += freq;
+          batch_hit += freq;
+          break;
+        }
+      }
+      if (!found) {
+        batch_miss++;
+        if (!curr_block.full) {
+          insert = false;
+          for (size_t j = 0; j < way_; ++j) {
+            if (-1 == curr_cached[j].id) {
+              insert = true;
+              curr_cached[j].id = id;
+              curr_cached[j].count = freq;
+              break;
+            }
+          }
+          curr_block.full = !insert;
+        } else {
+          min_j = 0;
+          min_count = std::numeric_limits<size_t>::max();
+          for (size_t j = 0; j < way_; ++j) {
+            if (min_count > curr_cached[j].count) {
+              min_count = curr_cached[j].count;
+              min_j = j;
+            }
+          }
+          {
+            mutex_lock l(curr_block.mtx_evicted);
+            curr_block.evicted.push_back(curr_cached[min_j].id);
+          }
+          curr_cached[min_j].id = id;
+          curr_cached[min_j].count = freq;
+        }
+      }
+    }
+    __sync_fetch_and_add(&size_, batch_miss);
+    __sync_fetch_and_add(&this->num_hit, batch_hit);
+    __sync_fetch_and_add(&this->num_miss, batch_miss);
   }
 
-  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) { }
+  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) {
+    mutex_lock l(prefetch_mu_);
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      auto it_prefetch = prefetch_id_table.find(id);
+      if (it_prefetch == prefetch_id_table.end()) {
+        int64 freq = 1;
+        CacheBlock& curr_block = *cache_[id % block_count_];
+        std::vector<CacheItem>& curr_cached = curr_block.cached;
+        mutex_lock l(curr_block.mtx_cached);
+        for (size_t j = 0; j < way_; ++j) {
+          if (id == curr_cached[j].id) {
+            curr_cached[j].id = -1;
+            curr_block.full = false;
+            freq = curr_cached[j].count;
+            __sync_fetch_and_sub(&size_, 1);
+            break;
+          }
+        }
+        prefetch_id_table[id] = new PrefetchLFUNode<K>(id, freq);
+      } else {
+        it_prefetch->second->Ref();
+      }
+    }
+  }
 
-  void add_to_cache(const K* batch_ids, const size_t batch_size) { }
+  void add_to_cache(const K* batch_ids, const size_t batch_size) {
+    mutex_lock l(prefetch_mu_);
+    std::vector<K> ids_to_cache(batch_size);
+    std::vector<int64> freqs_to_cache(batch_size);
+    int64 nums_to_cache = 0;
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      auto it_prefetch = prefetch_id_table.find(id);
+      if (it_prefetch == prefetch_id_table.end()) {
+        LOG(FATAL) << "The id should be prefetched before being used.";
+      }
+      it_prefetch->second->UnRef();
+      if (it_prefetch->second->ref_count() == 0) {
+        int64 freq = it_prefetch->second->freq();
+        delete it_prefetch->second;
+        prefetch_id_table.erase(id);
+        ids_to_cache[nums_to_cache] = id;
+        freqs_to_cache[nums_to_cache] = freq;
+        nums_to_cache++;
+      }
+    }
+    const int64* versions_to_cache = nullptr;
+    update(ids_to_cache.data(), nums_to_cache,
+           versions_to_cache, freqs_to_cache.data(),
+           false);
+  }
 
  private:
   class CacheItem {
@@ -396,7 +591,9 @@ class BlockLockLFUCache : public BatchCache<K> {
     CacheBlock& operator=(CacheBlock&) = delete;
   };
 
+  std::unordered_map<K, PrefetchLFUNode<K>*> prefetch_id_table;
   std::vector<CacheBlock*> cache_;
+  mutex prefetch_mu_;
   size_t block_count_;
   size_t evic_idx_;
   size_t way_;
