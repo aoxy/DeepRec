@@ -272,8 +272,9 @@ template <class K>
 class BlockLockLFUCache : public BatchCache<K> {
  public:
   BlockLockLFUCache(size_t capacity, size_t way)
-      : evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
+      : full_(false), evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
     block_count_ = capacity_ / way_;
+    LOG(INFO) << "Enter -----> BlockLockLFUCache --> block_count_ = " << block_count_;
     cache_.resize(block_count_);
     for (size_t i = 0; i < block_count_; i++) {
       cache_[i] = new CacheBlock(way_);
@@ -286,11 +287,13 @@ class BlockLockLFUCache : public BatchCache<K> {
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
     size_t true_size = 0;
-    for (size_t i = 0; i < block_count_; i++) {
-      mutex_lock l((*cache_[evic_idx_]).mtx_evic);
-      while (true_size < k_size && !(*cache_[evic_idx_]).evic_buffer.empty()) {
-        evic_ids[true_size++] = *(*cache_[evic_idx_]).evic_buffer.end();
-        (*cache_[evic_idx_]).evic_buffer.pop_back();
+    for (size_t i = 0; true_size < k_size && i < block_count_; i++) {
+      CacheBlock& curr_block = *cache_[evic_idx_];
+      std::vector<K>& curr_evicted = curr_block.evicted;
+      mutex_lock l(curr_block.mtx_evicted);
+      while (true_size < k_size && !curr_evicted.empty()) {
+        evic_ids[true_size++] = *curr_evicted.end();
+        curr_evicted.pop_back();
       }
       evic_idx_ = (evic_idx_ + 1) % block_count_;
     }
@@ -307,44 +310,43 @@ class BlockLockLFUCache : public BatchCache<K> {
     int batch_insert = 0;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
-      size_t block_idx = id % block_count_;
+      CacheBlock& curr_block = *cache_[id % block_count_];
+      std::vector<CacheItem>& curr_cached = curr_block.cached;
       found = false;
-      mutex_lock l((*cache_[block_idx]).mtx_cache);
+      mutex_lock l(curr_block.mtx_cached);
       for (size_t j = 0; j < way_; ++j) {
-        if (id == (*cache_[block_idx]).cache_block[j].id) {
+        if (id == curr_cached[j].id) {
           found = true;
-          (*cache_[block_idx]).cache_block[j].count++;
-          batch_hit++;
+          ++curr_cached[j].count;
+          ++batch_hit;
         }
       }
       if (!found) {
         batch_miss++;
         insert = false;
         size_t min_j = 0;
-        size_t min_count = (*cache_[block_idx]).cache_block[min_j].count;
+        size_t min_count = curr_cached[min_j].count;
         for (size_t j = 0; j < way_; ++j) {
-          if (-1 == (*cache_[block_idx]).cache_block[j].id) {
+          if (-1 == curr_cached[j].id) {
             insert = true;
             batch_insert++;
-            (*cache_[block_idx]).cache_block[j].id = id;
-            (*cache_[block_idx]).cache_block[j].count = 1;
+            curr_cached[j].id = id;
+            curr_cached[j].count = 1;
             break;
           }
-          if (min_count > (*cache_[block_idx]).cache_block[j].count) {
-            min_count = (*cache_[block_idx]).cache_block[j].count;
+          if (min_count > curr_cached[j].count) {
+            min_count = curr_cached[j].count;
             min_j = j;
           }
         }
         if (!insert) {
           {
-            mutex_lock l((*cache_[block_idx]).mtx_evic);
-            (*cache_[block_idx])
-                .evic_buffer.push_back(
-                    (*cache_[block_idx]).cache_block[min_j].id);
+            mutex_lock l(curr_block.mtx_evicted);
+            curr_block.evicted.push_back(curr_cached[min_j].id);
           }
 
-          (*cache_[block_idx]).cache_block[min_j].id = id;
-          (*cache_[block_idx]).cache_block[min_j].count = 1;
+          curr_cached[min_j].id = id;
+          curr_cached[min_j].count = 1;
         }
       }
     }
@@ -370,26 +372,27 @@ class BlockLockLFUCache : public BatchCache<K> {
   void add_to_cache(const K* batch_ids, const size_t batch_size) { }
 
  private:
-  class BlockNode {
+  class CacheItem {
    public:
     K id;
     size_t count;
-    BlockNode(K id) : id(id), count(0) {}
-    BlockNode() : id(-1), count(0) {}
+    CacheItem(K id) : id(id), count(0) {}
+    CacheItem() : id(-1), count(0) {}
   };
   class CacheBlock {
    public:
-    std::vector<BlockNode> cache_block;
-    std::vector<K> evic_buffer;
-    mutex mtx_cache;
-    mutex mtx_evic;
-    CacheBlock(size_t way) { cache_block.resize(way); }
+    std::vector<CacheItem> cached;
+    std::vector<K> evicted;
+    mutex mtx_cached;
+    mutex mtx_evicted;
+    CacheBlock(size_t way) { cached.resize(way); }
     CacheBlock() = delete;
     CacheBlock(CacheBlock&) = delete;
     CacheBlock& operator=(CacheBlock&) = delete;
   };
 
   std::vector<CacheBlock*> cache_;
+  bool full_;
   size_t block_count_;
   size_t evic_idx_;
   size_t way_;
