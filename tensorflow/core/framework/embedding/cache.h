@@ -272,7 +272,7 @@ template <class K>
 class BlockLockLFUCache : public BatchCache<K> {
  public:
   BlockLockLFUCache(size_t capacity, size_t way)
-      : full_(false), evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
+      : evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
     block_count_ = capacity_ / way_;
     LOG(INFO) << "Enter -----> BlockLockLFUCache --> block_count_ = " << block_count_;
     cache_.resize(block_count_);
@@ -305,9 +305,10 @@ class BlockLockLFUCache : public BatchCache<K> {
                    bool use_locking=true) {
     bool found;
     bool insert;
+    size_t min_j;
+    size_t min_count;
     int batch_hit = 0;
     int batch_miss = 0;
-    int batch_insert = 0;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       CacheBlock& curr_block = *cache_[id % block_count_];
@@ -319,32 +320,35 @@ class BlockLockLFUCache : public BatchCache<K> {
           found = true;
           ++curr_cached[j].count;
           ++batch_hit;
+          break;
         }
       }
       if (!found) {
         batch_miss++;
-        insert = false;
-        size_t min_j = 0;
-        size_t min_count = curr_cached[min_j].count;
-        for (size_t j = 0; j < way_; ++j) {
-          if (-1 == curr_cached[j].id) {
-            insert = true;
-            batch_insert++;
-            curr_cached[j].id = id;
-            curr_cached[j].count = 1;
-            break;
+        if (!curr_block.full) {
+          insert = false;
+          for (size_t j = 0; j < way_; ++j) {
+            if (-1 == curr_cached[j].id) {
+              insert = true;
+              curr_cached[j].id = id;
+              curr_cached[j].count = 1;
+              break;
+            }
           }
-          if (min_count > curr_cached[j].count) {
-            min_count = curr_cached[j].count;
-            min_j = j;
+          curr_block.full = !insert;
+        } else {
+          min_j = 0;
+          min_count = curr_cached[0].count;
+          for (size_t j = 0; j < way_; ++j) {
+            if (min_count > curr_cached[j].count) {
+              min_count = curr_cached[j].count;
+              min_j = j;
+            }
           }
-        }
-        if (!insert) {
           {
             mutex_lock l(curr_block.mtx_evicted);
             curr_block.evicted.push_back(curr_cached[min_j].id);
           }
-
           curr_cached[min_j].id = id;
           curr_cached[min_j].count = 1;
         }
@@ -385,14 +389,14 @@ class BlockLockLFUCache : public BatchCache<K> {
     std::vector<K> evicted;
     mutex mtx_cached;
     mutex mtx_evicted;
-    CacheBlock(size_t way) { cached.resize(way); }
+    bool full;
+    CacheBlock(size_t way) : full(false) { cached.resize(way); }
     CacheBlock() = delete;
     CacheBlock(CacheBlock&) = delete;
     CacheBlock& operator=(CacheBlock&) = delete;
   };
 
   std::vector<CacheBlock*> cache_;
-  bool full_;
   size_t block_count_;
   size_t evic_idx_;
   size_t way_;
