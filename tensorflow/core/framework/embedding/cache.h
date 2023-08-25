@@ -307,20 +307,12 @@ class BlockLockLFUCache : public BatchCache<K> {
           }
         }
       }
-      //==============================================(
-      std::cout << "CacheBlock[" << i << "]: " << " max_j = " << max_j << " ";
-      for (size_t j = 0; j < way_; ++j) {
-        std::cout << curr_cached[j].id << "(" << curr_cached[j].count << "), ";
-      }
-      std::cout << std::endl;
-      //==============================================)
       K max_id = curr_cached[max_j].id;
       if (max_id != -1 && !cached_set.count(max_id)) {
         --total_cached_size;
         cached_set.insert(max_id);
         cached_ids[true_size] = max_id;
         cached_freqs[true_size++] = curr_cached[max_j].count;
-        LOG(INFO) << "Enter -----> BlockLockLFUCache --> max_id = " << max_id << " true_size = " << true_size;
       }
       if ((i + 1) % block_count_ == 0) {
         if (total_cached_size == 0) {
@@ -352,13 +344,6 @@ class BlockLockLFUCache : public BatchCache<K> {
         size_t min_j = 0;
         size_t min_count = std::numeric_limits<size_t>::max();
         mutex_lock l(curr_block.mtx_cached);
-        //==============================================(
-        std::cout << "CacheBlock[" << i << "]: ";
-        for (size_t j = 0; j < way_; ++j) {
-          std::cout << curr_cached[j].id << "(" << curr_cached[j].count << "), ";
-        }
-        std::cout << std::endl;
-        //==============================================)
         for (size_t j = 0; j < way_; ++j) {
           if (curr_cached[j].id != -1) {
             ++total_cached_size;
@@ -371,18 +356,9 @@ class BlockLockLFUCache : public BatchCache<K> {
         if (curr_cached[min_j].id != -1) {
           --total_cached_size;
           evic_ids[true_size++] = curr_cached[min_j].id;
-          LOG(INFO) << "Enter --> curr_cached[min_j].id = " << curr_cached[min_j].id;
           curr_cached[min_j].id = -1;
           curr_block.full = false;
         }
-        //==============================================(
-        LOG(INFO) << "Enter --> min_j = " << min_j << " --> total_cached_size = " << total_cached_size;
-        std::cout << "CacheBlock[" << i << "]: ";
-        for (size_t j = 0; j < way_; ++j) {
-          std::cout << curr_cached[j].id << "(" << curr_cached[j].count << "), ";
-        }
-        std::cout << std::endl;
-        //==============================================)
         if ((i + 1) % block_count_ == 0) {
           if (total_cached_size == 0) {
             break;
@@ -405,7 +381,6 @@ class BlockLockLFUCache : public BatchCache<K> {
     int batch_miss = 0;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
-      LOG(INFO) << "Enter -----> BlockLockLFUCache --> id = " << id;
       CacheBlock& curr_block = *cache_[id % block_count_];
       std::vector<CacheItem>& curr_cached = curr_block.cached;
       found = false;
@@ -449,7 +424,6 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    LOG(INFO) << "Enter -----> BlockLockLFUCache --> batch_miss = " << batch_miss;
     __sync_fetch_and_add(&size_, batch_miss);
     // TODO: Use environment variables to control the granularity of updates, per Batch or per ID
     __sync_fetch_and_add(&this->num_hit, batch_hit);

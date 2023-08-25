@@ -145,7 +145,7 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
     int64 default_value_dim, int64 filter_freq = 0,
     int64 steps_to_live = 0,
     float l2_weight_threshold=-1.0,
-    CacheStrategy cache_strategy=CacheStrategy::LFU) {
+    CacheStrategy cache_strategy=CacheStrategy::B8LFU) {
   std::string layout_type = "normal";
   if (steps_to_live != 0 && filter_freq == 0) {
     layout_type = "normal_contiguous";
@@ -159,7 +159,7 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
       embedding::StorageFactory::Create<int64, float>(
           embedding::StorageConfig(
               embedding::StorageType::DRAM_SSDHASH, "",
-              {1024 * 1024 * 52, 1024, 1024, 1024}, layout_type,
+              {int64(1024 * 1024) * int64(52 * 6), 1024, 1024, 1024}, layout_type,
               embedding_config, cache_strategy),
           cpu_allocator(),
           "emb_var");
