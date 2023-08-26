@@ -566,14 +566,14 @@ void TestMultiTierLookupOrCreateCache(std::string title,
   LOG(INFO) << title << " Finish generating skew input";
   std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
   for (auto num_thread : num_thread_vec) {
-    LOG(INFO) << title << " Test MultiTierLookupOrCreate With " << num_thread
+    LOG(INFO) << title << " With " << num_thread
               << " threads.";
     double exec_time = PerfMultiTierLookupOrCreate(input_batches, num_thread, 0,
                                                    cache_strategy);
     if (exec_time == -1.0) {
       LOG(INFO) << title << " Test Failed";
     } else {
-      LOG(INFO) << title << " Performance of MultiTierLookupOrCreate With "
+      LOG(INFO) << title << " Performance With "
                 << num_thread << " threads: " << exec_time / 1000000 << " ms";
     }
   }
@@ -581,19 +581,19 @@ void TestMultiTierLookupOrCreateCache(std::string title,
 
 TEST(EmbeddingVariablePerformanceTest, TestMultiTierLookupOrCreate) {
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:LRU",
-  // CacheStrategy::LRU);
+  //                                  CacheStrategy::LRU);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:LFU",
-  // CacheStrategy::LFU);
+  //                                  CacheStrategy::LFU);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:BLFU(4)",
-  // CacheStrategy::B4LFU);
+                                  //  CacheStrategy::B4LFU);
   TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:BLFU(8)",
                                    CacheStrategy::B8LFU);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:BLFU(16)",
-  // CacheStrategy::B16LFU);
+  //                                  CacheStrategy::B16LFU);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:BLFU(32)",
-  // CacheStrategy::B32LFU);
+  //                                  CacheStrategy::B32LFU);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:BLFU(64)",
-  // CacheStrategy::B64LFU);
+  //                                  CacheStrategy::B64LFU);
 }
 
 void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
@@ -647,14 +647,14 @@ void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
   LOG(INFO) << title << " Finish generating skew input";
   std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
   for (auto num_thread : num_thread_vec) {
-    LOG(INFO) << title << " Test Lookup With " << num_thread << " threads.";
+    LOG(INFO) << title << " With " << num_thread << " threads.";
     double exec_time =
         PerfLookup(ev, input_batches, num_thread, value_size,
                    (float*)default_value.data(), default_value_dim);
     if (exec_time == -1.0) {
       LOG(INFO) << title << " Test Failed";
     } else {
-      LOG(INFO) << title << " Performance of Lookup With " << num_thread
+      LOG(INFO) << title << " Performance With " << num_thread
                 << " threads: " << exec_time / 1000000 << " ms";
     }
   }
@@ -664,15 +664,14 @@ void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
 TEST(EmbeddingVariablePerformanceTest, TestMultiTierLookup) {
   // TestMultiTierLookupCache("TestMultiTierLookup:LRU", CacheStrategy::LRU);
   // TestMultiTierLookupCache("TestMultiTierLookup:LFU", CacheStrategy::LFU);
-  // TestMultiTierLookupCache("TestMultiTierLookup:BLFU(4)",
-  // CacheStrategy::B4LFU);
+  // TestMultiTierLookupCache("TestMultiTierLookup:BLFU(4)", CacheStrategy::B4LFU);
   TestMultiTierLookupCache("TestMultiTierLookup:BLFU(8)", CacheStrategy::B8LFU);
   // TestMultiTierLookupCache("TestMultiTierLookup:BLFU(16)",
-  // CacheStrategy::B16LFU);
+  //                          CacheStrategy::B16LFU);
   // TestMultiTierLookupCache("TestMultiTierLookup:BLFU(32)",
-  // CacheStrategy::B32LFU);
+  //                          CacheStrategy::B32LFU);
   // TestMultiTierLookupCache("TestMultiTierLookup:BLFU(64)",
-  // CacheStrategy::B64LFU);
+  //                          CacheStrategy::B64LFU);
 }
 
 } //namespace embedding

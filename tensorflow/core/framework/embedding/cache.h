@@ -52,17 +52,20 @@ class BatchCache {
       const K* batch_ids, size_t batch_size) = 0;
   virtual size_t size() = 0;
   virtual void reset_status() {
-     num_hit = 0;
-     num_miss = 0;
+     *num_hit = 0;
+     *num_miss = 0;
+  }
+  virtual float hit_rate() {
+    float hit_rate = 0.0;
+    if (*num_hit > 0 || *num_miss > 0) {
+      hit_rate = *num_hit * 100.0 / (*num_hit + *num_miss);
+    }
+    return hit_rate;
   }
   std::string DebugString() {
-    float hit_rate = 0.0;
-    if (num_hit > 0 || num_miss > 0) {
-      hit_rate = num_hit * 100.0 / (num_hit + num_miss);
-    }
-    return strings::StrCat("HitRate = " , hit_rate,
-                          " %, visit_count = ", num_hit + num_miss,
-                           ", hit_count = ", num_hit);
+    return strings::StrCat("HitRate = " , hit_rate(),
+                          " %, visit_count = ", *num_hit + *num_miss,
+                           ", hit_count = ", *num_hit);
   }
   virtual mutex_lock maybe_lock_cache(
       mutex& mu, mutex& temp_mu,bool use_locking) {
@@ -76,8 +79,8 @@ class BatchCache {
   }
 
  protected:
-  int64 num_hit;
-  int64 num_miss;
+  int64 *num_hit;
+  int64 *num_miss;
 };
 
 template<class K>
@@ -139,8 +142,8 @@ class LRUCache : public BatchCache<K> {
     tail = new LRUNode(0);
     head->next = tail;
     tail->pre = head;
-    BatchCache<K>::num_hit = 0;
-    BatchCache<K>::num_miss = 0;
+    BatchCache<K>::num_hit = new int64();
+    BatchCache<K>::num_miss = new int64();
   }
 
   size_t size() {
@@ -193,7 +196,7 @@ class LRUCache : public BatchCache<K> {
         node->next = head->next;
         head->next = node;
         node->pre = head;
-        BatchCache<K>::num_hit++;
+        *BatchCache<K>::num_hit++;
       } else {
         LRUNode *newNode = new LRUNode(id);
         head->next->pre = newNode;
@@ -201,7 +204,7 @@ class LRUCache : public BatchCache<K> {
         head->next = newNode;
         newNode->pre = head;
         mp[id] = newNode;
-        BatchCache<K>::num_miss++;
+        *BatchCache<K>::num_miss++;
       }
     }
   }
@@ -280,11 +283,32 @@ class BlockLockLFUCache : public BatchCache<K> {
     for (size_t i = 0; i < block_count_; i++) {
       cache_[i] = new CacheBlock(way_);
     }
-    BatchCache<K>::num_hit = 0;
-    BatchCache<K>::num_miss = 0;
+    size_ = new size_t[16]();
+    BatchCache<K>::num_hit = new int64[16]();
+    BatchCache<K>::num_miss = new int64[16]();
   }
 
-  size_t size() { return size_; }
+  size_t size() {
+    size_t total_size = size_[0];
+    for (size_t j = 1; j < 16; ++j) {
+      total_size += size_[j];
+    }
+    return total_size; 
+  }
+
+  float hit_rate() override {
+    float hit_rate = 0.0;
+    size_t total_hit = this->num_hit[0];
+    size_t total_miss = this->num_miss[0];
+    for (size_t j = 1; j < 16; ++j) {
+      total_hit += this->num_hit[j];
+      total_miss += this->num_miss[j];
+    }
+    if (total_hit > 0 || total_miss > 0) {
+      hit_rate = total_hit * 100.0 / (total_hit + total_miss);
+    }
+    return hit_rate;
+  }
   
   size_t get_cached_ids(K* cached_ids, size_t k_size,
                         int64* cached_versions,
@@ -367,7 +391,7 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    __sync_fetch_and_sub(&size_, true_size);
+    __sync_fetch_and_sub(size_ + (evic_idx_ % 16), true_size);
     return true_size;
   }
 
@@ -379,6 +403,7 @@ class BlockLockLFUCache : public BatchCache<K> {
     size_t min_count;
     int batch_hit = 0;
     int batch_miss = 0;
+    unsigned sync_idx = batch_ids[0] % 16;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       CacheBlock& curr_block = *cache_[id % block_count_];
@@ -424,10 +449,10 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    __sync_fetch_and_add(&size_, batch_miss);
+    __sync_fetch_and_add(size_ + sync_idx, batch_miss);
     // TODO: Use environment variables to control the granularity of updates, per Batch or per ID
-    __sync_fetch_and_add(&this->num_hit, batch_hit);
-    __sync_fetch_and_add(&this->num_miss, batch_miss);
+    __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
+    __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
   }
 
   void update(const K* batch_ids, size_t batch_size,
@@ -440,6 +465,7 @@ class BlockLockLFUCache : public BatchCache<K> {
     size_t min_count;
     int batch_hit = 0;
     int batch_miss = 0;
+    unsigned sync_idx = batch_ids[0] % 16;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       int64 freq = batch_freqs[i];
@@ -486,9 +512,9 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    __sync_fetch_and_add(&size_, batch_miss);
-    __sync_fetch_and_add(&this->num_hit, batch_hit);
-    __sync_fetch_and_add(&this->num_miss, batch_miss);
+    __sync_fetch_and_add(size_ + sync_idx, batch_miss);
+    __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
+    __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
   }
 
   void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) {
@@ -506,7 +532,7 @@ class BlockLockLFUCache : public BatchCache<K> {
             curr_cached[j].id = -1;
             curr_block.full = false;
             freq = curr_cached[j].count;
-            __sync_fetch_and_sub(&size_, 1);
+            __sync_fetch_and_sub(size_ + (id % 16), 1);
             break;
           }
         }
@@ -572,7 +598,7 @@ class BlockLockLFUCache : public BatchCache<K> {
   size_t evic_idx_;
   size_t way_;
   size_t capacity_;
-  size_t size_;
+  size_t *size_;
 };
 
 template <class K>
@@ -583,8 +609,8 @@ class LFUCache : public BatchCache<K> {
     max_freq = 0;
     freq_table.emplace_back(std::pair<std::list<LFUNode>*, int64>(
       new std::list<LFUNode>, 0));
-    BatchCache<K>::num_hit = 0;
-    BatchCache<K>::num_miss = 0;
+    BatchCache<K>::num_hit = new int64();
+    BatchCache<K>::num_miss = new int64();
   }
 
   size_t size() {
@@ -659,7 +685,7 @@ class LFUCache : public BatchCache<K> {
         key_table[id] = freq_table[0].first->begin();
         min_freq = 1;
         max_freq = std::max(max_freq, min_freq);
-        BatchCache<K>::num_miss++;
+        *BatchCache<K>::num_miss++;
       } else {
         typename std::list<LFUNode>::iterator node = it->second;
         size_t freq = node->freq;
@@ -677,7 +703,7 @@ class LFUCache : public BatchCache<K> {
         freq_table[freq].first->emplace_front(LFUNode(id, freq + 1));
         freq_table[freq].second++;
         key_table[id] = freq_table[freq].first->begin();
-        BatchCache<K>::num_hit++;
+        *BatchCache<K>::num_hit++;
       }
     }
   }
@@ -711,7 +737,7 @@ class LFUCache : public BatchCache<K> {
         freq_table[freq-1].first->emplace_front(LFUNode(id, freq));
         freq_table[freq-1].second++;
         key_table[id] = freq_table[freq-1].first->begin();
-        BatchCache<K>::num_miss++;
+        *BatchCache<K>::num_miss++;
       } else {
         typename std::list<LFUNode>::iterator node = it->second;
         size_t last_freq = node->freq;
@@ -734,7 +760,7 @@ class LFUCache : public BatchCache<K> {
         freq_table[curr_freq-1].first->emplace_front(LFUNode(id, curr_freq));
         freq_table[curr_freq-1].second++;
         key_table[id] = freq_table[curr_freq-1].first->begin();
-        BatchCache<K>::num_hit++;
+        *BatchCache<K>::num_hit++;
       }
     }
   }
