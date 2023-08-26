@@ -136,6 +136,7 @@ class EmbFile {
              std::ios::in  |
              std::ios::out |
              std::ios::binary);
+    LOG(INFO) << "OpenFstream --> " << filepath_ << " --> " << fs_.good();
     CHECK(fs_.good());
   }
   void CloseFstream() {

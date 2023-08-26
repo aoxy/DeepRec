@@ -158,7 +158,7 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
   auto storage =
       embedding::StorageFactory::Create<int64, float>(
           embedding::StorageConfig(
-              embedding::StorageType::DRAM_SSDHASH, "",
+              embedding::StorageType::DRAM_SSDHASH, "axy_tmp",
               {int64(1024 * 1024) * int64(52 * 6), 1024, 1024, 1024}, layout_type,
               embedding_config, cache_strategy),
           cpu_allocator(),

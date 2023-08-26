@@ -47,6 +47,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   TF_DISALLOW_COPY_AND_ASSIGN(DramSsdHashStorage);
 
   Status Get(K key, ValuePtr<V>** value_ptr) override {
+    this->cache_->update(&key, 1);
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
       return s;
@@ -233,6 +234,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
                       file_id_map);
   }
   Status Eviction(K* evict_ids, int64 evict_size) override {
+    LOG(INFO) << "Eviction --> ";
     ValuePtr<V>* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
@@ -245,6 +247,8 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) override {
+    return Status::OK();
+    // LOG(INFO) << "EvictionWithDelayedDestroy --> ";
     mutex_lock l(*(dram_->get_mutex()));
     mutex_lock l1(*(ssd_hash_->get_mutex()));
     MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->alloc_);

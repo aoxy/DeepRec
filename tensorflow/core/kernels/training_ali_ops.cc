@@ -1533,7 +1533,7 @@ class KvSparseApplyAdamOp : public OpKernel {
       Shard(worker_threads.num_threads, worker_threads.workers, N, cost, DoWork);
       if (has_counts && !indices_as_pointer) {
         const Tensor& indices_counts = ctx->input(12);
-        var->UpdateCache(indices, indices_counts);
+        var->UpdateCache(indices, indices_counts);// TODO:
       }
     }
   }

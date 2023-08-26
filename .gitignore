@@ -1,3 +1,6 @@
+axy_tmp/
+modelzoo/dcnv2/data
+Use.md
 .DS_Store
 .ipynb_checkpoints
 node_modules
