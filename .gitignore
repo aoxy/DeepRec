@@ -44,3 +44,5 @@ Podfile.lock
 Pods
 xcuserdata
 *~
+axy_tmp/
+modelzoo/dcnv2/data

@@ -199,7 +199,7 @@ class StorageManager {
   }
 
   int64 GertStorageSize() {
-    return sc_.size;
+    return sc_.size[0];
   }
 
   bool IsMultiLevel() {
