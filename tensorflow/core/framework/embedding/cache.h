@@ -12,6 +12,7 @@
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/strings/strcat.h"
+#include "tensorflow/core/util/env_var.h"
 
 namespace tensorflow {
 namespace embedding {
@@ -276,14 +277,19 @@ template <class K>
 class BlockLockLFUCache : public BatchCache<K> {
  public:
   BlockLockLFUCache(size_t capacity, size_t way)
-      : evic_idx_(0), way_(way), capacity_(capacity), size_(0) {
+      : evic_idx_(0),
+        way_(way),
+        capacity_(capacity),
+        size_(0),
+        is_record_hitrate_(false) {
     block_count_ = capacity_ / way_;
-    LOG(INFO) << "Enter -----> BlockLockLFUCache --> block_count_ = " << block_count_;
     cache_.resize(block_count_);
     for (size_t i = 0; i < block_count_; i++) {
       cache_[i] = new CacheBlock(way_);
     }
     size_ = new size_t[16]();
+    TF_CHECK_OK(ReadBoolFromEnvVar("TF_CACHE_RECORD_HITRATE", false,
+                                   &is_record_hitrate_));
     BatchCache<K>::num_hit = new int64[16]();
     BatchCache<K>::num_miss = new int64[16]();
   }
@@ -293,7 +299,7 @@ class BlockLockLFUCache : public BatchCache<K> {
     for (size_t j = 1; j < 16; ++j) {
       total_size += size_[j];
     }
-    return total_size; 
+    return total_size;
   }
 
   float hit_rate() override {
@@ -450,9 +456,10 @@ class BlockLockLFUCache : public BatchCache<K> {
       }
     }
     __sync_fetch_and_add(size_ + sync_idx, batch_miss);
-    // TODO: Use environment variables to control the granularity of updates, per Batch or per ID
-    __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
-    __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
+    if (is_record_hitrate_) {
+      __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
+      __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
+    }
   }
 
   void update(const K* batch_ids, size_t batch_size,
@@ -513,8 +520,10 @@ class BlockLockLFUCache : public BatchCache<K> {
       }
     }
     __sync_fetch_and_add(size_ + sync_idx, batch_miss);
-    __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
-    __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
+    if (is_record_hitrate_) {
+      __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
+      __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
+    }
   }
 
   void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) {
@@ -599,6 +608,7 @@ class BlockLockLFUCache : public BatchCache<K> {
   size_t way_;
   size_t capacity_;
   size_t *size_;
+  bool is_record_hitrate_;
 };
 
 template <class K>

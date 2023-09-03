@@ -55,28 +55,43 @@ void GenerateSkewIds(int num_of_ids, float skew_factor,
 void InitSkewInputBatch(std::vector<std::vector<int64>>& input_batches,
                         float skew_factor,
                         const std::vector<int64>& hot_ids_list,
-                        const std::vector<int64>& cold_ids_list) {
+                        const std::vector<int64>& cold_ids_list,
+                        bool batch_unique = false) {
   srand((unsigned)time(NULL));
   int num_of_hot_ids = hot_ids_list.size();
   int num_of_cold_ids = cold_ids_list.size();
   int num_of_batch = input_batches.size();
+  std::unordered_set<int64> id_set;
   for (int i = 0; i < input_batches.size(); i++) {
     for (int j = 0; j < input_batches[i].size(); j++) {
       int tmp = rand() % 10;
       if ((float)tmp * 0.1 < skew_factor) {
         int pos = rand() % num_of_hot_ids;
+        while (batch_unique && id_set.count(hot_ids_list[pos])) {
+          pos = rand() % num_of_hot_ids;
+        }
         input_batches[i][j] = hot_ids_list[pos];
       } else {
         int pos = rand() % num_of_cold_ids;
+        while (batch_unique && id_set.count(cold_ids_list[pos])) {
+          pos = rand() % num_of_hot_ids;
+        }
         input_batches[i][j] = cold_ids_list[pos];
       }
+      if (batch_unique) {
+        id_set.insert(input_batches[i][j]);
+      }
+    }
+    if (batch_unique) {
+      id_set.clear();
     }
   }
 }
 
 
 void GenerateSkewInput(int num_of_ids, float skew_factor,
-                      std::vector<std::vector<int64>>& input_batches) {
+                       std::vector<std::vector<int64>>& input_batches,
+                       bool batch_unique = false) {
   std::vector<int64> hot_ids_list;
   std::vector<int64> cold_ids_list;
   //Generate hot ids
@@ -84,7 +99,8 @@ void GenerateSkewInput(int num_of_ids, float skew_factor,
                   hot_ids_list, cold_ids_list);
   //Select id for each batch
   InitSkewInputBatch(input_batches, skew_factor,
-                     hot_ids_list, cold_ids_list);
+                     hot_ids_list, cold_ids_list,
+                     batch_unique);
 }
 
 void thread_lookup_or_create(
@@ -101,9 +117,10 @@ void thread_lookup_or_create(
   }
 }
 
-double PerfLookupOrCreate(
-    const std::vector<std::vector<int64>>& input_batches,
-    int num_thread, int filter_freq = 0) {
+double PerfLookupOrCreate(const std::vector<std::vector<int64>>& input_batches,
+                          int num_thread, int filter_freq = 0,
+                          CacheStrategy cache_strategy = CacheStrategy::LFU,
+                          bool multi_tier = false) {
   int value_size = 32;
   int64 default_value_dim = 4096;
   Tensor default_value(DT_FLOAT, TensorShape({default_value_dim, value_size}));
@@ -113,19 +130,27 @@ double PerfLookupOrCreate(
 			default_value_matrix(i, j) = i * value_size + j;
 		}
 	}
-  auto ev = CreateEmbeddingVar(value_size, default_value,
-                               default_value_dim, filter_freq);
+  EmbeddingVar<int64,float>* ev;
+  if (multi_tier) {
+    ev = CreateMultiTierEmbeddingVar(value_size, default_value,
+                                     default_value_dim, 0, 100, -1.0,
+                                     cache_strategy);
+  } else {
+    ev = CreateEmbeddingVar(value_size, default_value, default_value_dim,
+                            filter_freq);
+  }
+                               
   std::vector<std::thread> worker_threads(num_thread);
   double total_time = 0.0;
   timespec start, end;
   for (int k = 0; k < input_batches.size(); k++) {
-    //Allocate Outputs for each batch
+    // Allocate Outputs for each batch
     std::vector<float*> outputs(input_batches[k].size());
     for (int i = 0; i < outputs.size(); i++) {
       outputs[i] =
           (float*)cpu_allocator()->AllocateRaw(0, sizeof(float) * value_size);
     }
-    //Execution
+    // Execution
     std::vector<std::pair<int, int>> thread_task_range(num_thread);
     for (int i = 0; i < num_thread; i++) {
       int st = input_batches[k].size() / num_thread * i;
@@ -149,7 +174,7 @@ double PerfLookupOrCreate(
     if (k > 10)
       total_time += ((double)(end.tv_sec - start.tv_sec) *
                      1000000000 + end.tv_nsec - start.tv_nsec);
-    //Check
+    // Check
     for (int i = 0; i < input_batches[k].size(); i++) {
       int64 key =  input_batches[k][i];
       float* output = outputs[i];
@@ -162,7 +187,7 @@ double PerfLookupOrCreate(
         }
       }
     }
-    //Deallocate Output
+    // Deallocate Output
     for (auto ptr: outputs) {
       cpu_allocator()->DeallocateRaw(ptr);
     }
@@ -472,77 +497,6 @@ TEST(EmbeddingVariablePerformaceTest, TestCounterFilterLookupOrCreate) {
   }
 }
 
-double PerfMultiTierLookupOrCreate(
-    const std::vector<std::vector<int64>>& input_batches,
-    int num_thread, int filter_freq = 0,
-    CacheStrategy cache_strategy=CacheStrategy::LFU) {
-  int value_size = 32;
-  int64 default_value_dim = 4096;
-  Tensor default_value(DT_FLOAT, TensorShape({default_value_dim, value_size}));
-  auto default_value_matrix = default_value.matrix<float>();
-  for (int i = 0; i < default_value_dim; i++) {
-    for (int j = 0; j < value_size; j++) {
-      default_value_matrix(i, j) = i * value_size + j;
-    }
-  }
-  auto ev = CreateMultiTierEmbeddingVar(value_size, default_value,
-                               default_value_dim, 0, 100, -1.0, cache_strategy);
-  std::vector<std::thread> worker_threads(num_thread);
-  double total_time = 0.0;
-  timespec start, end;
-  for (int k = 0; k < input_batches.size(); k++) {
-    // Allocate Outputs for each batch
-    std::vector<float*> outputs(input_batches[k].size());
-    for (int i = 0; i < outputs.size(); i++) {
-      outputs[i] =
-          (float*)cpu_allocator()->AllocateRaw(0, sizeof(float) * value_size);
-    }
-    // Execution
-    std::vector<std::pair<int, int>> thread_task_range(num_thread);
-    for (int i = 0; i < num_thread; i++) {
-      int st = input_batches[k].size() / num_thread * i;
-      int ed = input_batches[k].size() / num_thread * (i + 1);
-      ed = (ed > input_batches[k].size()) ? input_batches[k].size() : ed;
-      thread_task_range[i].first = st;
-      thread_task_range[i].second = ed;
-    }
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    for (int i = 0; i < num_thread; i++) {
-      worker_threads[i] = std::thread(thread_lookup_or_create,
-                                      ev, input_batches[k].data(),
-                                      outputs.data(), value_size,
-                                      thread_task_range[i].first,
-                                      thread_task_range[i].second);
-    }
-    for (int i = 0; i < num_thread; i++) {
-      worker_threads[i].join();
-    }
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    if (k > 10)
-      total_time += ((double)(end.tv_sec - start.tv_sec) * 1000000000 +
-                     end.tv_nsec - start.tv_nsec);
-    // Check
-    for (int i = 0; i < input_batches[k].size(); i++) {
-      int64 key = input_batches[k][i];
-      float* output = outputs[i];
-      for (int j = 0; j < value_size; j++) {
-        float val = default_value_matrix(key % default_value_dim, j);
-        if (output[j] != val) {
-          LOG(INFO) << "Value Error: outputs[" << key << "][" << j << "] is "
-                    << output[j] << ", while the anwser is " << val;
-          return -1.0;
-        }
-      }
-    }
-    // Deallocate Output
-    for (auto ptr : outputs) {
-      cpu_allocator()->DeallocateRaw(ptr);
-    }
-  }
-  ev->Unref();
-  return total_time;
-}
-
 void TestMultiTierLookupOrCreateCache(std::string title,
                                       CacheStrategy cache_strategy) {
   int num_of_batch = 100;
@@ -553,7 +507,7 @@ void TestMultiTierLookupOrCreateCache(std::string title,
     input_batches[i].resize(batch_size);
   }
   LOG(INFO) << title << " Start generating skew input";
-  GenerateSkewInput(num_of_ids, 0.8, input_batches);
+  GenerateSkewInput(num_of_ids, 0.8, input_batches, /*batch_unique=*/true);
 
   std::set<int64> uids;
   for (int i = 0; i < num_of_batch; i++) {
@@ -566,15 +520,14 @@ void TestMultiTierLookupOrCreateCache(std::string title,
   LOG(INFO) << title << " Finish generating skew input";
   std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
   for (auto num_thread : num_thread_vec) {
-    LOG(INFO) << title << " With " << num_thread
-              << " threads.";
-    double exec_time = PerfMultiTierLookupOrCreate(input_batches, num_thread, 0,
-                                                   cache_strategy);
+    LOG(INFO) << title << " With " << num_thread << " threads.";
+    double exec_time = PerfLookupOrCreate(input_batches, num_thread, 0,
+                                          cache_strategy, /*multi_tier=*/true);
     if (exec_time == -1.0) {
       LOG(INFO) << title << " Test Failed";
     } else {
-      LOG(INFO) << title << " Performance With "
-                << num_thread << " threads: " << exec_time / 1000000 << " ms";
+      LOG(INFO) << title << " Performance With " << num_thread
+                << " threads: " << exec_time / 1000000 << " ms";
     }
   }
 }
@@ -636,7 +589,7 @@ void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
   for (int i = 0; i < num_of_batch; i++) {
     input_batches[i].resize(batch_size);
   }
-  InitSkewInputBatch(input_batches, skew_factor, hot_ids_list, cold_ids_list);
+  InitSkewInputBatch(input_batches, skew_factor, hot_ids_list, cold_ids_list, /*batch_unique=*/true);
   std::set<int64> uids;
   for (int i = 0; i < num_of_batch; i++) {
     for (size_t j = 0; j < input_batches[i].size(); j++) {
