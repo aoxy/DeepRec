@@ -273,31 +273,41 @@ class LRUCache : public BatchCache<K> {
   mutex mu_;
 };
 
+// __thread static int sync_idx = -1;
+static thread_local int sync_idx = -1;
+
 template <class K>
 class BlockLockLFUCache : public BatchCache<K> {
  public:
-  BlockLockLFUCache(size_t capacity, size_t way)
+  BlockLockLFUCache(size_t capacity, size_t way, int num_threads)
       : evic_idx_(0),
+        num_threads_(num_threads),
         way_(way),
         capacity_(capacity),
-        size_(0),
         is_record_hitrate_(false) {
     block_count_ = capacity_ / way_;
+    sync_idx_count = 0;
     cache_.resize(block_count_);
     for (size_t i = 0; i < block_count_; i++) {
       cache_[i] = new CacheBlock(way_);
     }
-    size_ = new size_t[16]();
+    size_ = new size_t[num_threads_ * 16]();
     TF_CHECK_OK(ReadBoolFromEnvVar("TF_CACHE_RECORD_HITRATE", false,
                                    &is_record_hitrate_));
-    BatchCache<K>::num_hit = new int64[16]();
-    BatchCache<K>::num_miss = new int64[16]();
+    BatchCache<K>::num_hit = new int64[num_threads_ * 16]();
+    BatchCache<K>::num_miss = new int64[num_threads_ * 16]();
+  }
+
+  ~BlockLockLFUCache() override {
+    delete[] size_;
+    delete[] BatchCache<K>::num_hit;
+    delete[] BatchCache<K>::num_miss;
   }
 
   size_t size() {
     size_t total_size = size_[0];
-    for (size_t j = 1; j < 16; ++j) {
-      total_size += size_[j];
+    for (size_t j = 1; j < num_threads_; ++j) {
+      total_size += size_[j * 16];
     }
     return total_size;
   }
@@ -306,9 +316,9 @@ class BlockLockLFUCache : public BatchCache<K> {
     float hit_rate = 0.0;
     size_t total_hit = this->num_hit[0];
     size_t total_miss = this->num_miss[0];
-    for (size_t j = 1; j < 16; ++j) {
-      total_hit += this->num_hit[j];
-      total_miss += this->num_miss[j];
+    for (size_t j = 1; j < num_threads_; ++j) {
+      total_hit += this->num_hit[j * 16];
+      total_miss += this->num_miss[j * 16];
     }
     if (total_hit > 0 || total_miss > 0) {
       hit_rate = total_hit * 100.0 / (total_hit + total_miss);
@@ -397,7 +407,11 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    __sync_fetch_and_sub(size_ + (evic_idx_ % 16), true_size);
+    if (sync_idx < 0) {
+      mutex_lock l(sync_idx_mu_);
+      sync_idx = (sync_idx_count++) % num_threads_;
+    }
+    size_[sync_idx * 16] -= true_size;
     return true_size;
   }
 
@@ -409,7 +423,6 @@ class BlockLockLFUCache : public BatchCache<K> {
     size_t min_count;
     int batch_hit = 0;
     int batch_miss = 0;
-    unsigned sync_idx = batch_ids[0] % 16;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       CacheBlock& curr_block = *cache_[id % block_count_];
@@ -455,10 +468,14 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    __sync_fetch_and_add(size_ + sync_idx, batch_miss);
+    if (sync_idx < 0) {
+      mutex_lock l(sync_idx_mu_);
+      sync_idx = (sync_idx_count++) % num_threads_;
+    }
+    size_[sync_idx * 16] += batch_miss;
     if (is_record_hitrate_) {
-      __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
-      __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
+      this->num_hit[sync_idx * 16] += batch_hit;
+      this->num_miss[sync_idx * 16] += batch_miss;
     }
   }
 
@@ -472,7 +489,6 @@ class BlockLockLFUCache : public BatchCache<K> {
     size_t min_count;
     int batch_hit = 0;
     int batch_miss = 0;
-    unsigned sync_idx = batch_ids[0] % 16;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       int64 freq = batch_freqs[i];
@@ -519,15 +535,24 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
     }
-    __sync_fetch_and_add(size_ + sync_idx, batch_miss);
+    if (sync_idx < 0) {
+      mutex_lock l(sync_idx_mu_);
+      sync_idx = (sync_idx_count++) % num_threads_;
+    }
+    size_[sync_idx * 16] += batch_miss;
+    // __sync_fetch_and_add(size_ + (sync_idx % num_threads_), batch_miss);
     if (is_record_hitrate_) {
-      __sync_fetch_and_add(this->num_hit + sync_idx, batch_hit);
-      __sync_fetch_and_add(this->num_miss + sync_idx, batch_miss);
+      this->num_hit[sync_idx * 16] += batch_hit;
+      this->num_miss[sync_idx * 16] += batch_miss;
     }
   }
 
   void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) {
     mutex_lock l(prefetch_mu_);
+    if (sync_idx < 0) {
+      mutex_lock l(sync_idx_mu_);
+      sync_idx = (sync_idx_count++) % num_threads_;
+    }
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       auto it_prefetch = prefetch_id_table.find(id);
@@ -541,7 +566,8 @@ class BlockLockLFUCache : public BatchCache<K> {
             curr_cached[j].id = -1;
             curr_block.full = false;
             freq = curr_cached[j].count;
-            __sync_fetch_and_sub(size_ + (id % 16), 1);
+            // __sync_fetch_and_sub(size_ + (sync_idx % num_threads_), 1);
+            size_[sync_idx * 16]--;
             break;
           }
         }
@@ -603,12 +629,15 @@ class BlockLockLFUCache : public BatchCache<K> {
   std::unordered_map<K, PrefetchLFUNode<K>*> prefetch_id_table;
   std::vector<CacheBlock*> cache_;
   mutex prefetch_mu_;
+  mutex sync_idx_mu_;
   size_t block_count_;
   size_t evic_idx_;
+  int num_threads_;
   size_t way_;
   size_t capacity_;
   size_t *size_;
   bool is_record_hitrate_;
+  unsigned int sync_idx_count;
 };
 
 template <class K>
