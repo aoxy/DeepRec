@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_KV_INTERFACE_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_KV_INTERFACE_H_
 
+#include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/core/lib/core/status.h"
 
 namespace tensorflow {
@@ -29,22 +30,13 @@ class ValuePtr;
 template <class K, class V>
 class GPUHashTable;
 
+using GPUDevice = Eigen::GpuDevice;
 namespace embedding {
-class Iterator {
+
+template<class V>
+class ValueIterator {
  public:
-  Iterator() {};
-  virtual ~Iterator() {};
-  virtual bool Valid() {return true;};
-  virtual void SeekToFirst() {};
-  virtual void SwitchToFilteredFeatures() {};
-  virtual void SwitchToAdmitFeatures() {};
-  virtual void Next() {};
-  virtual void Key(char* val, int64 dim) {};
-  virtual void Freq(char* val, int64 dim) {};
-  virtual void Version(char* val, int64 dim) {};
-  virtual void Value(char* val, int64 dim, int64 value_offset) {};
-  virtual void SetPartOffset(int32* part_offet_ptr) {};
-  virtual void SetPartFilterOffset(int32* part_offet_ptr) {};
+  virtual V* Next() = 0;
 };
 
 template <class K, class V>
@@ -98,19 +90,17 @@ class KVInterface {
 
   virtual std::string DebugString() const = 0;
 
-  virtual Iterator* GetIterator() { return nullptr; }
-
   virtual Status BatchLookupOrCreate(const K* keys, V* val, V* default_v,
       int32 default_v_num,
-      size_t n, const Eigen::GpuDevice& device) {
+      size_t n, const GPUDevice& device) {
     return Status::OK();
   }
   virtual Status BatchLookupOrCreateKeys(const K* keys, size_t n,
-      int32* item_idxs, const Eigen::GpuDevice& device) {
+      int32* item_idxs, const GPUDevice& device) {
     return Status::OK();
   }
 
-  virtual Status BatchLookup(const Eigen::GpuDevice& device, 
+  virtual Status BatchLookup(const GPUDevice& device,
       const K* keys, V* val, size_t n, const V* default_v) {
     return Status(error::Code::UNIMPLEMENTED,
                   "Unimplemented for BatchLookup in KVInterface.");

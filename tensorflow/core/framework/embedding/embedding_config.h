@@ -3,6 +3,9 @@
 
 #include <cmath>
 #include "tensorflow/core/framework/embedding/config.pb.h"
+#include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/lib/strings/strcat.h"
+#include "tensorflow/core/platform/default/logging.h"
 
 namespace tensorflow {
 struct EmbeddingConfig {
@@ -99,6 +102,16 @@ struct EmbeddingConfig {
   }
   bool is_primary() const {
     return emb_index == primary_emb_index;
+  }
+
+  bool is_save_freq() const {
+    return filter_freq != 0 ||
+           record_freq ||
+           normal_fix_flag == 1;
+  }
+
+  bool is_save_version() const {
+    return steps_to_live != 0 || record_version;
   }
 
   int64 total_num(int alloc_len) {
