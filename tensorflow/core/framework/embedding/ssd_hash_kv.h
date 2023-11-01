@@ -593,7 +593,8 @@ class SSDHashKV : public KVInterface<K, V> {
       delete posi;
       pos_out_of_date_.pop_front();
     }
-    pos_out_of_date_.emplace_back(old_posi);
+    LOG(INFO) << "pos_out_of_date_.size() = " << pos_out_of_date_.size() << ", " << old_posi;
+    pos_out_of_date_.push_back(old_posi);
   }
 
   bool UpdatePosition(EmbPosition** pos, EmbPosition* old_posi,
@@ -681,7 +682,7 @@ class SSDHashKV : public KVInterface<K, V> {
       EmbPosition* posi = it.second;
       auto iter = evict_file_map_.find(posi->version_);
       if (iter != evict_file_map_.end()) {
-        (*iter).second.emplace_back(it);
+        (*iter).second.push_back(std::make_pair(it.first, it.second));
       }
     }
   }

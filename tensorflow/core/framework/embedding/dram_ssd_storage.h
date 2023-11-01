@@ -232,7 +232,9 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
                       restore_buff.key_offset_list_buf,
                       restore_buff.num_of_keys,
                       file_id_map);
+    return Status::OK();
   }
+
   Status Eviction(K* evict_ids, int64 evict_size) override {
     LOG(INFO) << "Eviction --> ";
     ValuePtr<V>* value_ptr = nullptr;
@@ -247,7 +249,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) override {
-    return Status::OK();
+    // return Status::OK();
     // LOG(INFO) << "EvictionWithDelayedDestroy --> ";
     mutex_lock l(*(dram_->get_mutex()));
     mutex_lock l1(*(ssd_hash_->get_mutex()));

@@ -240,6 +240,7 @@ class CheckpointLoader {
       Status st =
           reader_->LookupTensorShape(restore_args_.m_tensor_key, &key_shape);
       if (!st.ok()) {
+        LOG(FATAL) << "Restore record " << restore_args_.m_tensor_key << " failed";
       }
       int tot_key_num = key_shape.dim_size(0);
       Status s = EVRestoreFeatures(tot_key_num, 0, 0, 0, 0, restore_buff,
@@ -268,7 +269,7 @@ class CheckpointLoader {
 
         EVRestoreFeatures(tot_key_num, key_part_offset, value_part_offset,
                           version_part_offset, freq_part_offset, restore_buff,
-                          new_dim, emb_config, device);
+                          new_dim, emb_config, device); // TODO:1
 
         if (restore_args_.m_has_filter) {
           Status s = EVRestoreFilteredFeatures(
@@ -558,7 +559,7 @@ class CheckpointLoader {
     size_t version_bytes_read = 0;
     size_t freq_bytes_read = 0;
 
-    while (tot_key_num > 0) {
+    while (tot_key_num > 0) { // TODO:2
       size_t read_key_num = std::min(
           std::min(kBufferSize / sizeof(K), kBufferSize / value_unit_bytes),
                    kBufferSize / sizeof(int64));
@@ -615,7 +616,7 @@ class CheckpointLoader {
             read_key_num, kSavedPartitionNum, restore_args_.m_partition_id,
             restore_args_.m_partition_num, new_dim, false, restore_args_.m_is_incr,
             emb_config, device,
-            filter_, restore_buff);
+            filter_, restore_buff); // TODO:3
         if (!st.ok()) {
           LOG(FATAL) << "EV Restore fail:" << st.ToString();
         }

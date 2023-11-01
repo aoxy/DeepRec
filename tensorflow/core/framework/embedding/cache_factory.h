@@ -23,7 +23,7 @@ namespace embedding {
 class CacheFactory {
  public:
   template<typename K>
-  static BatchCache<K>* Create(CacheStrategy cache_strategy, std::string name, int64 capacity) {
+  static BatchCache<K>* Create(CacheStrategy cache_strategy, std::string name, int64 capacity, int num_threads) {
     switch (cache_strategy) {
       case CacheStrategy::LRU:
         LOG(INFO) << " Use Strategy::LRU in multi-tier EmbeddingVariable "
@@ -36,23 +36,23 @@ class CacheFactory {
       case CacheStrategy::B4LFU:
         LOG(INFO) << " Use Strategy::B4LFU in multi-tier EmbeddingVariable "
                 << name;
-        return new BlockLockLFUCache<K>(capacity, 4);
+        return new BlockLockLFUCache<K>(capacity, 4, num_threads);
       case CacheStrategy::B8LFU:
         LOG(INFO) << " Use Strategy::B8LFU in multi-tier EmbeddingVariable "
                 << name;
-        return new BlockLockLFUCache<K>(capacity, 8);
+        return new BlockLockLFUCache<K>(capacity, 8, num_threads);
       case CacheStrategy::B16LFU:
         LOG(INFO) << " Use Strategy::B16LFU in multi-tier EmbeddingVariable "
                 << name;
-        return new BlockLockLFUCache<K>(capacity, 16);
+        return new BlockLockLFUCache<K>(capacity, 16, num_threads);
       case CacheStrategy::B32LFU:
         LOG(INFO) << " Use Strategy::B32LFU in multi-tier EmbeddingVariable "
                 << name;
-        return new BlockLockLFUCache<K>(capacity, 32);
+        return new BlockLockLFUCache<K>(capacity, 32, num_threads);
       case CacheStrategy::B64LFU:
         LOG(INFO) << " Use Strategy::B64LFU in multi-tier EmbeddingVariable "
                 << name;
-        return new BlockLockLFUCache<K>(capacity, 64);
+        return new BlockLockLFUCache<K>(capacity, 64, num_threads);
       default:
         LOG(INFO) << " Invalid Cache strategy, \
                        use LFU in multi-tier EmbeddingVariable "

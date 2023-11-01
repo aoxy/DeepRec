@@ -13,6 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
+import datetime
 import time
 import argparse
 import tensorflow as tf
@@ -23,6 +24,8 @@ import collections
 import json
 
 from tensorflow.python.feature_column import utils as fc_utils
+from tensorflow.python.feature_column import feature_column_v2
+from tensorflow.core.framework.embedding import config_pb2
 
 result_dir='/tmp/tianchi/result/DLRM/'
 result_path=result_dir+'result'
@@ -340,10 +343,32 @@ def build_feature_columns():
         shared_emb_cols = tf.feature_column.shared_embedding_columns(
             cate_cols, EMBEDDING_DIMENSIONS)
         sparse_column.extend(shared_emb_cols)
+    # [1024 * 1024 * 500]
+    # Training completed.
+    # TimeCost = 211.61400655005127 sec
+    # /tmp/ssd_utpy/ssd_kv_1694879035247586_0049.emb --> 1
+    # sync_idx_count = 257
+    # HitRate = 93.3628693 %, visit_count = 8783227, hit_count = 8391594
+
+    # [1024 * 1024 * 300]
+    # Training completed.
+    # TimeCost = 256.4814247591421 sec
+    # /tmp/ssd_utpy/ssd_kv_1694879349958633_0108.emb --> 1
+    # sync_idx_count = 257
+    # HitRate = 88.1704865 %, visit_count = 7147653, hit_count = 6447856
+    storage_option = tf.StorageOption(storage_type=config_pb2.StorageType.DRAM_SSDHASH,
+                                  storage_path="/tmp/ssd_utpy",
+                                  storage_size=[1024 * 1024 * 500],
+                                  cache_strategy = config_pb2.CacheStrategy.B8LFU)
+                                  
+    ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
 
     for column in EMBEDDING_COLS:
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
+
+        if column == "timediff_list":
+            cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
 
         if args.tf or not args.emb_fusion:
             emb_col = tf.feature_column.embedding_column(
@@ -509,7 +534,7 @@ def main(tf_config=None, server=None):
 
     if args.smartstaged and not args.tf:
         '''Smart staged Feature'''
-        next_element = tf.staged(next_element, num_threads=4, capacity=40)
+        next_element = tf.staged(next_element, num_threads=4, capacity=10)
         sess_config.graph_options.optimizer_options.do_smart_stage = True
         hooks.append(tf.make_prefetch_hook())
     if args.op_fusion and not args.tf:
@@ -702,11 +727,18 @@ def set_env_for_DeepRec():
     os.environ['MALLOC_CONF'] = \
         'background_thread:true,metadata_thp:auto,dirty_decay_ms:20000,muzzy_decay_ms:20000'
     os.environ['ENABLE_MEMORY_OPTIMIZATION'] = '0'
+    ##########################################################
+    # os.environ['TF_EMBEDDING_FBJ_OPT'] = 'True'
+    os.environ['TF_EMBEDDING_FBJ_OPT'] = 'False'
+    os.environ['TF_SSDHASH_ASYNC_COMPACTION'] = 'False'
+    os.environ['TF_CACHE_RECORD_HITRATE'] = 'False'
 
 
 if __name__ == '__main__':
+    start_time = time.perf_counter()
     parser = get_arg_parser()
     args = parser.parse_args()
+    print("args.tf =", args.tf)
 
     if not args.tf:
         set_env_for_DeepRec()
@@ -717,3 +749,5 @@ if __name__ == '__main__':
     else:
         tf_config, server, tf_device = generate_cluster_info(TF_CONFIG)
         main(tf_config, server)
+    end_time = time.perf_counter()
+    print("TimeCost =", end_time - start_time, "sec")

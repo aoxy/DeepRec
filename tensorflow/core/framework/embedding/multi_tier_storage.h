@@ -62,8 +62,8 @@ class MultiTierStorage : public Storage<K, V> {
     Storage<K, V>::alloc_len_ = Storage<K, V>::ComputeAllocLen(value_len);
 
     int64 temp = Storage<K, V>::alloc_len_ * slot_num;
-    LOG(INFO) << "Enter -----> SetAllocLen -> temp = " << temp;
-    LOG(INFO) << "Enter -----> SetAllocLen -> Storage<K, V>::total_dims_ = " << Storage<K, V>::total_dims_;
+    // LOG(INFO) << "Enter -----> SetAllocLen -> temp = " << temp;
+    // LOG(INFO) << "Enter -----> SetAllocLen -> Storage<K, V>::total_dims_ = " << Storage<K, V>::total_dims_;
     if (temp > Storage<K, V>::total_dims_) {
       Storage<K, V>::total_dims_ = temp;
       SetTotalDims(Storage<K, V>::total_dims_);
@@ -83,9 +83,9 @@ class MultiTierStorage : public Storage<K, V> {
     return cache_;
   }
 
-  void InitCache(embedding::CacheStrategy cache_strategy) override {
+  void InitCache(embedding::CacheStrategy cache_strategy, int num_threads) override {
     LOG(INFO) << "Enter -----> InitCache -> cache_capacity_ = " << cache_capacity_;
-    cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_);
+    cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_, num_threads);
     eviction_manager_ = EvictionManagerCreator::Create<K, V>();
     eviction_manager_->AddStorage(this);
     cache_thread_pool_ = CacheThreadPoolCreator::Create();
@@ -230,10 +230,11 @@ class MultiTierStorage : public Storage<K, V> {
 
   void UpdateCache(const Tensor& indices,
                    const Tensor& indices_counts) override {
-    Schedule([this, indices, indices_counts]() {
-    LOG(INFO) << "Enter -----> UpdateCache1";
-      cache_->update(indices, indices_counts);
-    });
+    cache_->update(indices, indices_counts);
+    // Schedule([this, indices, indices_counts]() {
+    // LOG(INFO) << "Enter -----> UpdateCache1";
+    //   cache_->update(indices, indices_counts);
+    // });
   }
 
   void UpdateCache(const Tensor& indices) override {
@@ -248,17 +249,19 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   void AddToCachePrefetchList(const Tensor& indices) override {
-    LOG(INFO) << "Enter -----> AddToCachePrefetchList";
-    Schedule([this, indices]() {
-      cache_->add_to_prefetch_list(indices);
-    });
+    // LOG(INFO) << "Enter -----> AddToCachePrefetchList";
+    cache_->add_to_prefetch_list(indices);
+    // Schedule([this, indices]() {
+    //   cache_->add_to_prefetch_list(indices);
+    // });
   }
 
   void AddToCache(const Tensor& indices) override {
-    LOG(INFO) << "Enter -----> AddToCache";
-    Schedule([this, indices]() {
-      cache_->add_to_cache(indices);
-    });
+    // LOG(INFO) << "Enter -----> AddToCache";
+    cache_->add_to_cache(indices);
+    // Schedule([this, indices]() {
+    //   cache_->add_to_cache(indices);
+    // });
   }
 
  protected:
@@ -267,7 +270,7 @@ class MultiTierStorage : public Storage<K, V> {
                          bool is_incr, const EmbeddingConfig& emb_config,
                          const Eigen::GpuDevice* device,
                          FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
-                         RestoreBuffer& restore_buff) override {
+                         RestoreBuffer& restore_buff) override { // TODO:4
     Status s = filter->Restore(key_num, bucket_num, partition_id,
                                partition_num, value_len, is_filter,
                                false/*to_dram*/, is_incr, restore_buff);
@@ -278,10 +281,12 @@ class MultiTierStorage : public Storage<K, V> {
       int64* version_buff = (int64*)restore_buff.version_buffer;
       int64* freq_buff = (int64*)restore_buff.freq_buffer;
       if (cache_) {
+        LOG(INFO) << "Enter -----> RestoreFeatures key_num = " << key_num;
         cache_->update(key_buff, key_num, version_buff, freq_buff);
         auto cache_size = CacheSize();
         if (cache_->size() > cache_size) {
           int64 evict_size = cache_->size() - cache_size;
+          LOG(INFO) << "Enter -----> " << evict_size << " RestoreFeatures " << cache_size + evict_size;
           std::vector<K> evict_ids(evict_size);
           size_t true_size =
               cache_->get_evic_ids(evict_ids.data(), evict_size);
