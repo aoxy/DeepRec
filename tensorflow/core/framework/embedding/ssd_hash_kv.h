@@ -168,7 +168,6 @@ class SSDIterator : public Iterator {
   virtual void Version(char* val, int64 dim) {
     int64 f_id = file_id_vec_[curr_file_];
     EmbPosition* posi = (file_map_[f_id])[curr_vec_].second;
-
     if (posi->flushed_) {
       emb_files_[posi->version_]->
           ReadWithMemcpy(val, sizeof(FixedLengthHeader),
@@ -177,7 +176,7 @@ class SSDIterator : public Iterator {
       memcpy(val, write_buffer_ + posi->buffer_offset_,
              sizeof(FixedLengthHeader));
     }
-    *((int64*)val) = 
+    *((int64*)val) =
         reinterpret_cast<FixedLengthHeader*>(val)->GetGlobalStep();
   }
 
@@ -593,7 +592,6 @@ class SSDHashKV : public KVInterface<K, V> {
       delete posi;
       pos_out_of_date_.pop_front();
     }
-    LOG(INFO) << "pos_out_of_date_.size() = " << pos_out_of_date_.size() << ", " << old_posi;
     pos_out_of_date_.push_back(old_posi);
   }
 
@@ -614,7 +612,7 @@ class SSDHashKV : public KVInterface<K, V> {
     AppendToWriteBuffer(curr_buffer_offset, key, value_ptr);
 
     auto iter = hash_map_.insert_lockless(std::move(
-        std::pair<K, EmbPosition*>(key, const_cast<EmbPosition*>(ep))));
+        std::pair<K, EmbPosition*>(key, const_cast<EmbPosition*>(ep))));    
     emb_files_[ep->version_]->AddCount(1);
 
     if ((*(iter.first)).second != ep) {
@@ -842,7 +840,7 @@ class SSDHashKV : public KVInterface<K, V> {
   volatile size_t evict_version_ = 0;
   volatile size_t compaction_version_ = 0;
   volatile size_t current_offset_ = 0;
-  volatile size_t buffer_cur_ = 0;
+  size_t buffer_cur_ = 0;
   size_t total_app_count_ = 0;
   size_t max_app_count_;
 
