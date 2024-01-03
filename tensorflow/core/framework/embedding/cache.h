@@ -286,7 +286,8 @@ class BlockLockLFUCache : public BatchCache<K> {
         num_threads_(num_threads),
         way_(way),
         sync_idx_count(0),
-        is_expanding_(false) {
+        is_expanding_(false),
+        is_rehash_(false) {
     block_count_ = (capacity + way_ - 1) / way_;
     capacity_ = block_count_ * way_;
     base_capacity_ = capacity_;
@@ -315,22 +316,22 @@ class BlockLockLFUCache : public BatchCache<K> {
     }
     capacity_ = new_capacity;
     if (new_capacity > base_capacity_ * 2) {
+      LOG(INFO) << "Use rehash to change cache capacity.++++++++++++++";
       size_t new_block_count_ = (new_capacity + way_ - 1) / way_;
-      capacity_ = new_block_count_ * way_;
-      base_capacity_ = capacity_;
+      __sync_bool_compare_and_swap(&is_rehash_, false, true);
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
       std::vector<CacheBlock*> new_cache_;
-      new_cache_.resize(block_count_);
-      for (size_t i = 0; i < block_count_; i++) {
+      new_cache_.resize(new_block_count_);
+      for (size_t i = 0; i < new_block_count_; i++) {
         new_cache_[i] = new CacheBlock(way_);
       }
       for (size_t i = 0; i < cache_.size(); i++) {
         CacheBlock& curr_block = *cache_[i];
         {
           std::vector<CacheItem>& curr_cached = curr_block.cached;
-          mutex_lock l1(curr_block.mtx_cached);
+          mutex_lock l(curr_block.mtx_cached);
           for (const CacheItem& ci : curr_cached) {
-            CacheBlock& new_block = *new_cache_[ci.id % block_count_];
+            CacheBlock& new_block = *new_cache_[ci.id % new_block_count_];
             std::vector<CacheItem>& new_cached = new_block.cached;
             std::vector<K>& new_evicted = new_block.evicted;
             bool insert = false;
@@ -349,15 +350,24 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
         {
           std::vector<K>& curr_evicted = curr_block.evicted;
-          mutex_lock l2(curr_block.mtx_evicted);
+          mutex_lock l(curr_block.mtx_evicted);
           for (const K& id : curr_evicted) {
-            CacheBlock& new_block = *new_cache_[id % block_count_];
+            CacheBlock& new_block = *new_cache_[id % new_block_count_];
             std::vector<K>& new_evicted = new_block.evicted;
             new_evicted.emplace_back(id);
           }
         }
       }
-    } else if (new_capacity > base_capacity_) {
+      {
+        // mutex_lock l(rehash_mu_);
+        cache_.swap(new_cache_);
+        block_count_ = new_block_count_;
+        capacity_ = new_block_count_ * way_;
+        base_capacity_ = capacity_;
+      }
+      __sync_bool_compare_and_swap(&is_rehash_, true, false);
+    } else {
+      LOG(INFO) << "Use append to change cache capacity.===================";
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
       __sync_bool_compare_and_swap(&is_expanding_, false, true);
     }
@@ -700,6 +710,8 @@ class BlockLockLFUCache : public BatchCache<K> {
   size_t capacity_;
   size_t base_capacity_;
   bool is_expanding_;
+  bool is_rehash_;
+  mutex rehash_mu_;
   size_t *size_;
   bool is_record_hitrate_;
   unsigned int sync_idx_count;
