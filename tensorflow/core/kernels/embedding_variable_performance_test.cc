@@ -677,7 +677,16 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
                                       thread_task_range[i].first,
                                       thread_task_range[i].second);
     }
-    for (int i = 0; i < num_thread; i++) {
+    // Scaling cache capacity
+    // if (k % 10 == 0) {
+    //   worker_threads.emplace_back([&](){
+    //     size_t old_capacity = ev->Cache()->get_capacity();
+    //     size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
+    //     LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
+    //     ev->Cache()->set_capacity(new_capacity);
+    //   });
+    // }
+    for (int i = 0; i < worker_threads.size(); i++) {
       worker_threads[i].join();
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
@@ -703,10 +712,13 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
     }
     // Scaling cache capacity
     if (k % 10 == 0) {
-      size_t old_capacity = ev->Cache()->get_capacity();
-      size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
-      LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
-      ev->Cache()->set_capacity(new_capacity);
+      std::thread scale = std::thread([&](){
+        size_t old_capacity = ev->Cache()->get_capacity();
+        size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
+        LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
+        ev->Cache()->set_capacity(new_capacity);
+      });
+      scale.join();
     }
   }
   ev->Unref();
@@ -751,7 +763,7 @@ void TestLookupOrCreateElastic(std::string title,
 
 TEST(EmbeddingVariablePerformanceTest, TestLookupOrCreateElastic) {
   setenv("TF_SSDHASH_ASYNC_COMPACTION", "false", 1);
-  setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
+  // setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
   TestLookupOrCreateElastic("TestLookupOrCreateElastic:BLFU(8)",
                                    CacheStrategy::B8LFU);
 }

@@ -219,6 +219,7 @@ class MultiTierStorage : public Storage<K, V> {
     if (!ready_eviction_)
       return;
     int cache_count = cache_->size();
+    cache_capacity_ = cache_->get_capacity();
     if (cache_count > cache_capacity_) {
       // eviction
       int k_size = cache_count - cache_capacity_;
