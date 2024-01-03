@@ -145,7 +145,8 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
     int64 default_value_dim, int64 filter_freq = 0,
     int64 steps_to_live = 0,
     float l2_weight_threshold=-1.0,
-    CacheStrategy cache_strategy=CacheStrategy::B8LFU) {
+    CacheStrategy cache_strategy=CacheStrategy::B8LFU,
+    int num_threads=8) {
   std::string layout_type = "normal";
   if (steps_to_live != 0 && filter_freq == 0) {
     layout_type = "normal_contiguous";
@@ -169,7 +170,7 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
       embedding_config,
       cpu_allocator());
 	ev->Init(default_value, default_value_dim);
-  ev->InitCache(cache_strategy);
+  ev->InitCache(cache_strategy, num_threads);
   return ev;
 }
 } //namespace embedding

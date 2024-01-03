@@ -120,7 +120,7 @@ void thread_lookup_or_create(
 double PerfLookupOrCreate(const std::vector<std::vector<int64>>& input_batches,
                           int num_thread, int filter_freq = 0,
                           CacheStrategy cache_strategy = CacheStrategy::LFU,
-                          bool multi_tier = false) {
+                          bool multi_tier = false, int num_threads=8) {
   int value_size = 32;
   int64 default_value_dim = 4096;
   Tensor default_value(DT_FLOAT, TensorShape({default_value_dim, value_size}));
@@ -134,7 +134,7 @@ double PerfLookupOrCreate(const std::vector<std::vector<int64>>& input_batches,
   if (multi_tier) {
     ev = CreateMultiTierEmbeddingVar(value_size, default_value,
                                      default_value_dim, 0, 100, -1.0,
-                                     cache_strategy);
+                                     cache_strategy, num_threads);
   } else {
     ev = CreateEmbeddingVar(value_size, default_value, default_value_dim,
                             filter_freq);
@@ -570,7 +570,7 @@ void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
     }
   }
   auto ev = CreateMultiTierEmbeddingVar(value_size, default_value,
-                               default_value_dim, 0, 100, -1.0, cache_strategy);
+                               default_value_dim, 0, 100, -1.0, cache_strategy, 16);
   ValuePtr<float>* value_ptr = nullptr;
   bool is_filter = false;
   for (int i = 0; i < hot_ids_list.size(); i++) {
