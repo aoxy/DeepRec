@@ -315,9 +315,8 @@ class BlockLockLFUCache : public BatchCache<K> {
     }
     capacity_ = new_capacity;
     if (new_capacity > base_capacity_ * 2) {
-      size_t old_block_count_ = block_count_;
-      block_count_ = (new_capacity + way_ - 1) / way_;
-      capacity_ = block_count_ * way_;
+      size_t new_block_count_ = (new_capacity + way_ - 1) / way_;
+      capacity_ = new_block_count_ * way_;
       base_capacity_ = capacity_;
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
       std::vector<CacheBlock*> new_cache_;
@@ -329,17 +328,32 @@ class BlockLockLFUCache : public BatchCache<K> {
         CacheBlock& curr_block = *cache_[i];
         {
           std::vector<CacheItem>& curr_cached = curr_block.cached;
-          mutex_lock l(curr_block.mtx_cached);
+          mutex_lock l1(curr_block.mtx_cached);
           for (const CacheItem& ci : curr_cached) {
-            // new_cache_[ci.id % block_count_].
-            // TODO:
+            CacheBlock& new_block = *new_cache_[ci.id % block_count_];
+            std::vector<CacheItem>& new_cached = new_block.cached;
+            std::vector<K>& new_evicted = new_block.evicted;
+            bool insert = false;
+            for (size_t j = 0; j < new_cached.size(); ++j) {
+              if (BlockLockLFUCache<K>::EMPTY_CACHE_ == new_cached[j].id) {
+                insert = true;
+                new_cached[j].id = ci.id;
+                new_cached[j].count = ci.count;
+                break;
+              }
+            }
+            if (!insert) {
+              new_evicted.emplace_back(ci.id);
+            }
           }
         }
         {
           std::vector<K>& curr_evicted = curr_block.evicted;
-          mutex_lock l(curr_block.mtx_evicted);
-          for (const CacheItem& ci : curr_evicted) {
-            
+          mutex_lock l2(curr_block.mtx_evicted);
+          for (const K& id : curr_evicted) {
+            CacheBlock& new_block = *new_cache_[id % block_count_];
+            std::vector<K>& new_evicted = new_block.evicted;
+            new_evicted.emplace_back(id);
           }
         }
       }

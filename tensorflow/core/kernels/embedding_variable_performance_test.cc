@@ -751,6 +751,7 @@ void TestLookupOrCreateElastic(std::string title,
 
 TEST(EmbeddingVariablePerformanceTest, TestLookupOrCreateElastic) {
   setenv("TF_SSDHASH_ASYNC_COMPACTION", "false", 1);
+  setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
   TestLookupOrCreateElastic("TestLookupOrCreateElastic:BLFU(8)",
                                    CacheStrategy::B8LFU);
 }
