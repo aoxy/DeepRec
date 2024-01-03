@@ -52,6 +52,8 @@ class BatchCache {
   virtual void add_to_cache(
       const K* batch_ids, size_t batch_size) = 0;
   virtual size_t size() = 0;
+  virtual size_t get_capacity() { return 0; }
+  virtual void set_capacity(size_t new_capacity) {}
   virtual void reset_status() {
      *num_hit = 0;
      *num_miss = 0;
@@ -283,10 +285,11 @@ class BlockLockLFUCache : public BatchCache<K> {
       : evic_idx_(0),
         num_threads_(num_threads),
         way_(way),
-        capacity_(capacity),
-        is_record_hitrate_(false) {
-    block_count_ = capacity_ / way_;
-    sync_idx_count = 0;
+        sync_idx_count(0),
+        is_expanding_(false) {
+    block_count_ = (capacity + way_ - 1) / way_;
+    capacity_ = block_count_ * way_;
+    base_capacity_ = capacity_;
     cache_.resize(block_count_);
     for (size_t i = 0; i < block_count_; i++) {
       cache_[i] = new CacheBlock(way_);
@@ -302,6 +305,48 @@ class BlockLockLFUCache : public BatchCache<K> {
     delete[] size_;
     delete[] BatchCache<K>::num_hit;
     delete[] BatchCache<K>::num_miss;
+  }
+
+  size_t get_capacity() override { return capacity_; }
+
+  void set_capacity(size_t new_capacity) override {
+    if (new_capacity <= capacity_) {
+      return;
+    }
+    capacity_ = new_capacity;
+    if (new_capacity > base_capacity_ * 2) {
+      size_t old_block_count_ = block_count_;
+      block_count_ = (new_capacity + way_ - 1) / way_;
+      capacity_ = block_count_ * way_;
+      base_capacity_ = capacity_;
+      __sync_bool_compare_and_swap(&is_expanding_, true, false);
+      std::vector<CacheBlock*> new_cache_;
+      new_cache_.resize(block_count_);
+      for (size_t i = 0; i < block_count_; i++) {
+        new_cache_[i] = new CacheBlock(way_);
+      }
+      for (size_t i = 0; i < cache_.size(); i++) {
+        CacheBlock& curr_block = *cache_[i];
+        {
+          std::vector<CacheItem>& curr_cached = curr_block.cached;
+          mutex_lock l(curr_block.mtx_cached);
+          for (const CacheItem& ci : curr_cached) {
+            // new_cache_[ci.id % block_count_].
+            // TODO:
+          }
+        }
+        {
+          std::vector<K>& curr_evicted = curr_block.evicted;
+          mutex_lock l(curr_block.mtx_evicted);
+          for (const CacheItem& ci : curr_evicted) {
+            
+          }
+        }
+      }
+    } else if (new_capacity > base_capacity_) {
+      new_way_ = (new_capacity + block_count_ - 1) / block_count_;
+      __sync_bool_compare_and_swap(&is_expanding_, false, true);
+    }
   }
 
   size_t size() {
@@ -338,7 +383,7 @@ class BlockLockLFUCache : public BatchCache<K> {
       size_t max_j = 0;
       size_t max_count = 0;
       mutex_lock l(curr_block.mtx_cached);
-      for (size_t j = 0; j < way_; ++j) {
+      for (size_t j = 0; j < curr_cached.size(); ++j) {
         if (curr_cached[j].id > 0 && !cached_set.count(curr_cached[j].id)) {
           ++total_cached_size;
           if (max_count < curr_cached[j].count) {
@@ -348,7 +393,7 @@ class BlockLockLFUCache : public BatchCache<K> {
         }
       }
       K max_id = curr_cached[max_j].id;
-      if (max_id != -1 && !cached_set.count(max_id)) {
+      if (max_id != BlockLockLFUCache<K>::EMPTY_CACHE_ && !cached_set.count(max_id)) {
         --total_cached_size;
         cached_set.insert(max_id);
         cached_ids[true_size] = max_id;
@@ -384,8 +429,8 @@ class BlockLockLFUCache : public BatchCache<K> {
         size_t min_j = 0;
         size_t min_count = std::numeric_limits<size_t>::max();
         mutex_lock l(curr_block.mtx_cached);
-        for (size_t j = 0; j < way_; ++j) {
-          if (curr_cached[j].id != -1) {
+        for (size_t j = 0; j < curr_cached.size(); ++j) {
+          if (curr_cached[j].id != BlockLockLFUCache<K>::EMPTY_CACHE_) {
             ++total_cached_size;
             if (min_count >= curr_cached[j].count) {
               min_count = curr_cached[j].count;
@@ -393,10 +438,10 @@ class BlockLockLFUCache : public BatchCache<K> {
             }
           }
         }
-        if (curr_cached[min_j].id != -1) {
+        if (curr_cached[min_j].id != BlockLockLFUCache<K>::EMPTY_CACHE_) {
           --total_cached_size;
           evic_ids[true_size++] = curr_cached[min_j].id;
-          curr_cached[min_j].id = -1;
+          curr_cached[min_j].id = BlockLockLFUCache<K>::EMPTY_CACHE_;
           curr_block.full = false;
         }
         if ((i + 1) % block_count_ == 0) {
@@ -429,7 +474,7 @@ class BlockLockLFUCache : public BatchCache<K> {
       std::vector<CacheItem>& curr_cached = curr_block.cached;
       found = false;
       mutex_lock l(curr_block.mtx_cached);
-      for (size_t j = 0; j < way_; ++j) {
+      for (size_t j = 0; j < curr_cached.size(); ++j) {
         if (id == curr_cached[j].id) {
           found = true;
           ++curr_cached[j].count;
@@ -441,8 +486,8 @@ class BlockLockLFUCache : public BatchCache<K> {
         batch_miss++;
         if (!curr_block.full) {
           insert = false;
-          for (size_t j = 0; j < way_; ++j) {
-            if (-1 == curr_cached[j].id) {
+          for (size_t j = 0; j < curr_cached.size(); ++j) {
+            if (BlockLockLFUCache<K>::EMPTY_CACHE_ == curr_cached[j].id) {
               insert = true;
               curr_cached[j].id = id;
               curr_cached[j].count = 1;
@@ -450,10 +495,12 @@ class BlockLockLFUCache : public BatchCache<K> {
             }
           }
           curr_block.full = !insert;
+        } else if (is_expanding_ && curr_cached.size() < new_way_) {
+          curr_cached.emplace_back(id);
         } else {
           min_j = 0;
           min_count = std::numeric_limits<size_t>::max();
-          for (size_t j = 0; j < way_; ++j) {
+          for (size_t j = 0; j < curr_cached.size(); ++j) {
             if (min_count > curr_cached[j].count) {
               min_count = curr_cached[j].count;
               min_j = j;
@@ -496,7 +543,7 @@ class BlockLockLFUCache : public BatchCache<K> {
       std::vector<CacheItem>& curr_cached = curr_block.cached;
       found = false;
       mutex_lock l(curr_block.mtx_cached);
-      for (size_t j = 0; j < way_; ++j) {
+      for (size_t j = 0; j < curr_cached.size(); ++j) {
         if (id == curr_cached[j].id) {
           found = true;
           curr_cached[j].count += freq;
@@ -508,8 +555,8 @@ class BlockLockLFUCache : public BatchCache<K> {
         batch_miss++;
         if (!curr_block.full) {
           insert = false;
-          for (size_t j = 0; j < way_; ++j) {
-            if (-1 == curr_cached[j].id) {
+          for (size_t j = 0; j < curr_cached.size(); ++j) {
+            if (BlockLockLFUCache<K>::EMPTY_CACHE_ == curr_cached[j].id) {
               insert = true;
               curr_cached[j].id = id;
               curr_cached[j].count = freq;
@@ -520,7 +567,7 @@ class BlockLockLFUCache : public BatchCache<K> {
         } else {
           min_j = 0;
           min_count = std::numeric_limits<size_t>::max();
-          for (size_t j = 0; j < way_; ++j) {
+          for (size_t j = 0; j < curr_cached.size(); ++j) {
             if (min_count > curr_cached[j].count) {
               min_count = curr_cached[j].count;
               min_j = j;
@@ -561,9 +608,9 @@ class BlockLockLFUCache : public BatchCache<K> {
         CacheBlock& curr_block = *cache_[id % block_count_];
         std::vector<CacheItem>& curr_cached = curr_block.cached;
         mutex_lock l(curr_block.mtx_cached);
-        for (size_t j = 0; j < way_; ++j) {
+        for (size_t j = 0; j < curr_cached.size(); ++j) {
           if (id == curr_cached[j].id) {
-            curr_cached[j].id = -1;
+            curr_cached[j].id = BlockLockLFUCache<K>::EMPTY_CACHE_;
             curr_block.full = false;
             freq = curr_cached[j].count;
             // __sync_fetch_and_sub(size_ + (sync_idx % num_threads_), 1);
@@ -610,8 +657,8 @@ class BlockLockLFUCache : public BatchCache<K> {
    public:
     K id;
     size_t count;
-    CacheItem(K id) : id(id), count(0) {}
-    CacheItem() : id(-1), count(0) {}
+    CacheItem(K id) : id(id), count(1) {}
+    CacheItem() : id(BlockLockLFUCache<K>::EMPTY_CACHE_), count(0) {}
   };
   class CacheBlock {
    public:
@@ -632,13 +679,20 @@ class BlockLockLFUCache : public BatchCache<K> {
   mutex sync_idx_mu_;
   size_t block_count_;
   size_t evic_idx_;
+  size_t ext_idx_;
   int num_threads_;
   size_t way_;
+  size_t new_way_;
   size_t capacity_;
+  size_t base_capacity_;
+  bool is_expanding_;
   size_t *size_;
   bool is_record_hitrate_;
   unsigned int sync_idx_count;
+  static const K EMPTY_CACHE_;
 };
+template <class K>
+const K BlockLockLFUCache<K>::EMPTY_CACHE_ = -1;
 
 template <class K>
 class LFUCache : public BatchCache<K> {
