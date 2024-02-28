@@ -15,14 +15,12 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_DRAM_PMEM_STORAGE_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_DRAM_PMEM_STORAGE_H_
 
+#include "tensorflow/core/framework/embedding/cpu_hash_map_kv.h"
+#include "tensorflow/core/framework/embedding/feature_descriptor.h"
 #include "tensorflow/core/framework/embedding/multi_tier_storage.h"
 #include "tensorflow/core/framework/embedding/single_tier_storage.h"
-#include "tensorflow/core/framework/embedding/cpu_hash_map_kv.h"
 
 namespace tensorflow {
-template <class V>
-class ValuePtr;
-
 template <class K, class V>
 class EmbeddingVar;
 
@@ -31,36 +29,36 @@ namespace embedding {
 template<typename K, typename V>
 class DramPmemStorage : public MultiTierStorage<K, V> {
  public:
-  DramPmemStorage(const StorageConfig& sc, Allocator* dram_alloc,
-      Allocator* pmem_alloc, LayoutCreator<V>* lc,
+  DramPmemStorage(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc,
       const std::string& name)
-      : MultiTierStorage<K, V>(sc, name) {
-    dram_ = new DramStorage<K, V>(sc, dram_alloc, lc, new LocklessHashMap<K, V>());
-    pmem_ = new PmemLibpmemStorage<K, V>(sc, pmem_alloc, lc);
-    value_ptr_size_ =
-        const_cast<EmbeddingConfig&>(sc.embedding_config).total_num(
-            Storage<K, V>::GetAllocLen());
+      : dram_feat_desc_(feat_desc), 
+        MultiTierStorage<K, V>(sc, name) {
+    dram_ = new DramStorage<K, V>(sc, feat_desc);
+    pmem_feat_desc_ = new FeatureDescriptor<V>(feat_desc);
+    pmem_feat_desc_->SetAllocator(experimental_pmem_allocator(sc.path, sc.size[0]));
+
+    pmem_ = new PmemLibpmemStorage<K, V>(sc, pmem_feat_desc_);
   }
 
   ~DramPmemStorage() override {
     MultiTierStorage<K, V>::DeleteFromEvictionManager();
     delete dram_;
     delete pmem_;
+    delete pmem_feat_desc_;
   }
 
   TF_DISALLOW_COPY_AND_ASSIGN(DramPmemStorage);
 
-  Status Get(K key, ValuePtr<V>** value_ptr) override {
+  Status Get(K key, void** value_ptr) override {
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
       return s;
     }
     s = pmem_->Get(key, value_ptr);
+    void* new_value_ptr = dram_->CreateValuePtr();
     if (s.ok()) {
-      ValuePtr<V>* new_value_ptr = dram_->CreateValuePtr(value_ptr_size_);
-      memcpy(new_value_ptr->GetPtr(), (*value_ptr)->GetPtr(),
-             sizeof(FixedLengthHeader) + sizeof(V) * value_ptr_size_);
-      *value_ptr = new_value_ptr;
+      memcpy(new_value_ptr, value_ptr, pmem_feat_desc_->data_bytes());
       s = dram_->TryInsert(key, *value_ptr);
       if (s.ok()) {
         return s;
@@ -71,19 +69,19 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
     return s;
   }
 
-  void Insert(K key, ValuePtr<V>* value_ptr) override {
-    LOG(FATAL)<<"Unsupport Insert(K, ValuePtr<V>*) in DramPmemStorage.";
+  void Insert(K key, void** value_ptr) override {
+    dram_->Insert(key, value_ptr);
   }
 
-  void Insert(K key, ValuePtr<V>** value_ptr,
-              size_t alloc_len, bool to_dram = false) override {
-    dram_->Insert(key, value_ptr, alloc_len);
+  void CreateAndInsert(K key, void** value_ptr,
+      bool to_dram = false) override {
+    dram_->CreateAndInsert(key, value_ptr);
   }
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size, CopyBackFlag &need_copyback) override {
-     LOG(FATAL)<<"GetOrCreate(K key, ValuePtr<V>** value_ptr, "
-              <<"size_t size, CopyBackFlag &need_copyback) "
-              <<"in DramPmemStorage can not be called.";
+
+  void Import(K key, V* value,
+              int64 freq, int64 version,
+              int emb_index) override {
+    dram_->Import(key, value, freq, version, emb_index);
   }
 
   bool IsUseHbm() override {
@@ -94,18 +92,16 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
     return false;
   }
 
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size) override {
+  Status GetOrCreate(K key, void** value_ptr) override {
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
       return s;
     }
     s = pmem_->Get(key, value_ptr);
 
-    ValuePtr<V>* new_value_ptr = dram_->CreateValuePtr(size);
+    void* new_value_ptr = dram_->CreateValuePtr();
     if (s.ok()) {
-      memcpy(new_value_ptr->GetPtr(), (*value_ptr)->GetPtr(),
-             sizeof(FixedLengthHeader) + sizeof(V) * size);
+      memcpy(new_value_ptr, value_ptr, pmem_feat_desc_->data_bytes());
     }
     *value_ptr = new_value_ptr;
     
@@ -150,63 +146,46 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
     return -1;
   }
 
-  Status GetSnapshot(std::vector<K>* key_list,
-      std::vector<ValuePtr<V>* >* value_ptr_list) override {
-    {
-      mutex_lock l(*(dram_->get_mutex()));
-      TF_CHECK_OK(dram_->GetSnapshot(key_list, value_ptr_list));
-    }
-    {
-      mutex_lock l(*(pmem_->get_mutex()));
-      TF_CHECK_OK(pmem_->GetSnapshot(key_list, value_ptr_list));
-    }
-    return Status::OK();
-  }
-
-  Status Shrink(const ShrinkArgs& shrink_args) override {
-    dram_->Shrink(shrink_args);
-    pmem_->Shrink(shrink_args);
-    return Status::OK();
-  }
-
-  void iterator_mutex_lock() override {
-    return;
-  }
-
-  void iterator_mutex_unlock() override {
-    return;
-  }
-
-  int64 GetSnapshot(std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
+  Status Save(
+      const string& tensor_name,
+      const string& prefix,
+      BundleWriter* writer,
       const EmbeddingConfig& emb_config,
-      FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
-      embedding::Iterator** it) override {
-    {
-      mutex_lock l(*(dram_->get_mutex()));
-      std::vector<ValuePtr<V>*> value_ptr_list;
-      std::vector<K> key_list_tmp;
-      TF_CHECK_OK(dram_->GetSnapshot(&key_list_tmp, &value_ptr_list));
-      MultiTierStorage<K, V>::SetListsForCheckpoint(
-          key_list_tmp, value_ptr_list, emb_config,
-          key_list, value_list, version_list, freq_list);
+      ShrinkArgs& shrink_args,
+      int64 value_len,
+      V* default_value) override {
+    std::vector<K> key_list, tmp_pmem_key_list;
+    std::vector<void*> value_ptr_list, tmp_pmem_value_list;
+
+    TF_CHECK_OK(dram_->GetSnapshot(&key_list, &value_ptr_list));
+    dram_->Shrink(key_list, value_ptr_list, shrink_args, value_len);
+
+    TF_CHECK_OK(pmem_->GetSnapshot(&tmp_pmem_key_list,
+                                   &tmp_pmem_value_list));
+    pmem_->Shrink(tmp_pmem_key_list, tmp_pmem_value_list,
+                  shrink_args, value_len);
+
+    for (int64 i = 0; i < tmp_pmem_key_list.size(); i++) {
+      Status s = dram_->Contains(tmp_pmem_key_list[i]);
+      if (!s.ok()) {
+        key_list.emplace_back(tmp_pmem_key_list[i]);
+        value_ptr_list.emplace_back(tmp_pmem_value_list[i]);
+      }
     }
-    {
-      mutex_lock l(*(pmem_->get_mutex()));
-      std::vector<ValuePtr<V>*> value_ptr_list;
-      std::vector<K> key_list_tmp;
-      TF_CHECK_OK(pmem_->GetSnapshot(&key_list_tmp, &value_ptr_list));
-      MultiTierStorage<K, V>::SetListsForCheckpoint(
-          key_list_tmp, value_ptr_list, emb_config,
-          key_list, value_list, version_list, freq_list);
-    }
-    return key_list->size();
+
+    TF_CHECK_OK((Storage<K, V>::SaveToCheckpoint(
+        tensor_name, writer,
+        emb_config,
+        value_len, default_value,
+        key_list,
+        value_ptr_list,
+        pmem_feat_desc_)));
+
+    return Status::OK();
   }
 
   Status Eviction(K* evict_ids, int64 evict_size) override {
-    ValuePtr<V>* value_ptr;
+    void* value_ptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
         TF_CHECK_OK(pmem_->Commit(evict_ids[i], value_ptr));
@@ -220,8 +199,8 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
   Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) override {
     mutex_lock l(*(dram_->get_mutex()));
     mutex_lock l1(*(pmem_->get_mutex()));
-    MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->alloc_);
-    ValuePtr<V>* value_ptr = nullptr;
+    MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->feature_descriptor());
+    void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
         TF_CHECK_OK(pmem_->Commit(evict_ids[i], value_ptr));
@@ -232,13 +211,26 @@ class DramPmemStorage : public MultiTierStorage<K, V> {
     return Status::OK();
   }
 
+  void UpdateValuePtr(K key, void* new_value_ptr,
+                      void* old_value_ptr) override {
+    dram_->UpdateValuePtr(key, new_value_ptr, old_value_ptr);
+  }
+
+  void Init() override {
+    pmem_feat_desc_->InitSlotInfo(dram_feat_desc_);
+    MultiTierStorage<K, V>::Init();
+  }
+
  protected:
-  void SetTotalDims(int64 total_dims) override {}
+  int total_dim() override {
+    return pmem_feat_desc_->total_dim();
+  }
 
  private:
   DramStorage<K, V>* dram_;
   PmemLibpmemStorage<K, V>* pmem_;
-  int64 value_ptr_size_;
+  FeatureDescriptor<V>* dram_feat_desc_ = nullptr;
+  FeatureDescriptor<V>* pmem_feat_desc_ = nullptr;
 };
 } // embedding
 } // tensorflow

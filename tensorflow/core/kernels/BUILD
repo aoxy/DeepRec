@@ -439,7 +439,8 @@ tf_cc_test(
 
 tf_cuda_cc_test(
     name = "embedding_variable_ops_test",
-    srcs = ["embedding_variable_ops_test.cc"],
+    srcs = ["embedding_variable_ops_test.cc",
+            "embedding_variable_test.h"],
     extra_copts = ["-fexceptions", "-g"],
     deps = [
         ":io",
@@ -2907,7 +2908,10 @@ tf_kernel_library(
     hdrs = ["kv_variable_ops.h"],
     srcs = ["kv_variable_ops.cc",
             "kv_variable_lookup_ops.cc",
-            "kv_variable_save_restore_ops.cc"],
+            "kv_variable_restore_ops.cc",
+            "//tensorflow/core:framework/embedding/embedding_var_ckpt_data.cc",
+            "//tensorflow/core:framework/embedding/embedding_var_restore.cc",
+            "//tensorflow/core:framework/embedding/ssd_record_descriptor.cc"],
     copts = tf_copts() + ["-g"],
     deps = [
         ":bounds_check",
@@ -5453,14 +5457,14 @@ tf_kernel_library(
                 "group_embedding/group_embedding_lookup_sparse_backward_ops.cu.cc",],
     deps = ["//third_party/eigen3",
             "//tensorflow/core/kernels:gpu_device_array",
+            "//tensorflow/core/util/tensor_bundle",
             ":training_op_helpers",
             ":variable_ops",
+            ":save_restore_tensor",
             "//tensorflow/core:embedding_gpu",
             "@sparsehash_c11//:dense_hash_map",
             "@libcuckoo//:libcuckoo",
             ":unique_ali_op",
-            ":save_restore_tensor",
-            "//tensorflow/core/util/tensor_bundle",
             "@com_github_google_leveldb//:leveldb",] + DYNAMIC_DEPS + mkl_deps() +
            if_cuda(["@cub_archive//:cub",
                     ":fused_embedding_common_cuh",

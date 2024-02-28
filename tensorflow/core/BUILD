@@ -128,6 +128,7 @@ load(
     "tf_additional_numa_deps",
     "tf_additional_numa_lib_defines",
     "tf_additional_star_lib_defines",
+    "tf_additional_elastic_server_lib_defines",
     "tf_additional_api_compatible_defines",
     "tf_additional_pmem_lib_defines",
     "tf_additional_test_deps",
@@ -139,6 +140,7 @@ load(
     "tf_lib_proto_parsing_deps",
     "tf_proto_library",
     "tf_proto_library_cc",
+    "tf_proto_library_py",
     "tf_protos_all",
     "tf_protos_all_impl",
     "tf_protos_grappler",
@@ -1440,6 +1442,7 @@ tf_cc_test(
 cc_library(
     name = "ops",
     visibility = ["//visibility:public"],
+    defines = tf_additional_elastic_server_lib_defines(),
     deps = [
         ":array_ops_op_lib",
         ":parquet_ops_op_lib",
@@ -2475,6 +2478,28 @@ tf_proto_library_cc(
     ],
 )
 
+tf_proto_library_cc(
+    name = "elastic_service_proto",
+    srcs = ["protobuf/elastic_training.proto"],
+    has_services = 1,
+    cc_api_version = 2,
+    cc_grpc_version = 1,
+    cc_stubby_versions = ["2"],
+    protodeps = tf_additional_all_protos(),
+    visibility = [
+        "//tensorflow:internal",
+    ],
+)
+
+tf_proto_library_py(
+    name = "elastic_service_pb",
+    srcs = ["protobuf/elastic_training.proto"],
+    use_grpc_plugin = True,
+    visibility = [
+        "//tensorflow:internal",
+    ],
+)
+
 LIB_INTERNAL_PRIVATE_HEADERS = [
     "framework/resource_handle.h",
     "//tensorflow/core/platform:legacy_lib_internal_headers",
@@ -2539,7 +2564,8 @@ LIB_INTERNAL_DEFINES = (
     tf_additional_gdr_lib_defines() +
     tf_additional_numa_lib_defines() +
     tf_additional_star_lib_defines() +
-    tf_additional_pmem_lib_defines()
+    tf_additional_pmem_lib_defines() +
+    tf_additional_elastic_server_lib_defines()
 )
 
 cc_library(
@@ -3026,7 +3052,10 @@ tf_cuda_library(
             "framework/embedding/gpu_hash_table.cu.cc",
             "framework/embedding/gpu_hash_table.h",
             "framework/embedding/embedding_var.cu.cc",
-            "framework/embedding/multi_tier_storage.cu.cc"
+            "framework/embedding/multi_tier_storage.cu.cc",
+            "framework/embedding/embedding_var_ckpt_data.cc",
+            "framework/embedding/embedding_var_restore.cc",
+            "framework/embedding/ssd_record_descriptor.cc"
         ],
     ) + select({
         "//tensorflow:windows": [],

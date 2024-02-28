@@ -107,35 +107,42 @@ EmbeddingVar<int64, float>* CreateEmbeddingVar(
     int value_size, Tensor& default_value,
     int64 default_value_dim, int64 filter_freq = 0,
     int64 steps_to_live = 0,
-    float l2_weight_threshold=-1.0) {
-  std::string layout_type = "light";
-  if (filter_freq != 0) {
-    layout_type = "normal";
-  }
-
-  if (steps_to_live != 0) {
-    if (layout_type == "light") {
-      layout_type = "normal_contiguous";
-    }
-  }
+    float l2_weight_threshold=-1.0,
+    embedding::StorageType storage_type = embedding::StorageType::DRAM,
+    std::vector<int64> storage_size = {1024*1024*1024,
+                                       1024*1024*1024,
+                                       1024*1024*1024,
+                                       1024*1024*1024},
+    bool record_freq = false,
+    int64 max_element_size = 0,
+    float false_positive_probability = -1.0,
+    DataType counter_type = DT_UINT64) {
   auto embedding_config = EmbeddingConfig(
-			0, 0, 1, 0, "emb_var", steps_to_live,
-			filter_freq, 999999, l2_weight_threshold, layout_type,
-			0, -1.0, DT_UINT64, default_value_dim,
-			0.0, false, false, false);
+      0, 0, 1, 0, "emb_var", steps_to_live,
+      filter_freq, 999999, l2_weight_threshold,
+      max_element_size, false_positive_probability,
+      counter_type, default_value_dim,
+      0.0, record_freq, false, false);
+  auto feat_desc = new embedding::FeatureDescriptor<float>(
+      1, 1, ev_allocator(), storage_type,
+      record_freq,
+      embedding_config.is_save_version(),
+      {embedding_config.is_counter_filter(), filter_freq});
   auto storage =
       embedding::StorageFactory::Create<int64, float>(
           embedding::StorageConfig(
-              embedding::StorageType::DRAM, "",
-              {1024, 1024, 1024, 1024}, layout_type,
+              storage_type, "",
+              storage_size,
               embedding_config),
           cpu_allocator(),
+          feat_desc,
           "emb_var");
 	auto ev = new EmbeddingVar<int64, float>(
       "emb_var",
       storage,
       embedding_config,
-      cpu_allocator());
+      cpu_allocator(),
+      feat_desc);
 	ev->Init(default_value, default_value_dim);
   return ev;
 }
@@ -146,33 +153,49 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
     int64 steps_to_live = 0,
     float l2_weight_threshold=-1.0,
     CacheStrategy cache_strategy=CacheStrategy::B8LFU,
-    int num_threads=8) {
-  std::string layout_type = "normal";
-  if (steps_to_live != 0 && filter_freq == 0) {
-    layout_type = "normal_contiguous";
-  }
+    int num_threads=8,
+    embedding::StorageType storage_type = embedding::StorageType::DRAM_SSDHASH,
+    std::vector<int64> storage_size = {1024*1024*1024,
+                                       1024*1024*1024,
+                                       1024*1024*1024,
+                                       1024*1024*1024},
+    bool record_freq = false,
+    int64 max_element_size = 0,
+    float false_positive_probability = -1.0,
+    DataType counter_type = DT_UINT64) {
   auto embedding_config = EmbeddingConfig(
-			0, 0, 1, 0, "emb_var", steps_to_live,
-			filter_freq, 999999, l2_weight_threshold, layout_type,
-			0, -1.0, DT_UINT64, default_value_dim,
-			0.0, false, false, false);
+      0, 0, 1, 0, "emb_var", steps_to_live,
+      filter_freq, 999999, l2_weight_threshold,
+      max_element_size, false_positive_probability,
+      counter_type, default_value_dim,
+      0.0, record_freq, false, false);
+  auto feat_desc = new embedding::FeatureDescriptor<float>(
+      1, 1, ev_allocator(), storage_type,
+      record_freq,
+      embedding_config.is_save_version(),
+      {embedding_config.is_counter_filter(), filter_freq});
   auto storage =
       embedding::StorageFactory::Create<int64, float>(
           embedding::StorageConfig(
-              embedding::StorageType::DRAM_SSDHASH, "axy_tmp",
-              {int64(1024 * 1024) * int64(52 * 6), 1024, 1024, 1024}, layout_type,
-              embedding_config, cache_strategy),
+              storage_type, "axy_tmp",
+              storage_size,
+              embedding_config,
+              cache_strategy),
           cpu_allocator(),
+          feat_desc,
           "emb_var");
 	auto ev = new EmbeddingVar<int64, float>(
       "emb_var",
       storage,
       embedding_config,
-      cpu_allocator());
+      cpu_allocator(),
+      feat_desc);
 	ev->Init(default_value, default_value_dim);
   ev->InitCache(cache_strategy, num_threads);
   return ev;
 }
+
+
 } //namespace embedding
 } //namespace tensorflow
 #endif // TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_STORAGE_FACTORY_H_

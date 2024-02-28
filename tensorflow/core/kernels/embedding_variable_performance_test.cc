@@ -106,14 +106,21 @@ void GenerateSkewInput(int num_of_ids, float skew_factor,
 void thread_lookup_or_create(
     EmbeddingVar<int64, float>* ev,
     const int64* input_batch,
+    float* default_value,
+    int default_value_dim,
     float** outputs, int value_size,
     int start, int end) {
-  ValuePtr<float>* value_ptr = nullptr;
+  void* value_ptr = nullptr;
 	bool is_filter = false;
   for (int i = start; i < end; i++) {
     ev->LookupOrCreateKey(input_batch[i], &value_ptr, &is_filter, false);
-    auto val = ev->flat(value_ptr, input_batch[i]);
-    memcpy(outputs[i], &val(0), sizeof(float) * value_size);
+    if (is_filter) {
+      auto val = ev->flat(value_ptr);
+      memcpy(outputs[i], &val(0), sizeof(float) * value_size);
+    } else {
+      int default_value_index = input_batch[i] % default_value_dim;
+      memcpy(outputs[i], default_value + default_value_index * value_size, sizeof(float) * value_size);
+    }
   }
 }
 
@@ -163,6 +170,8 @@ double PerfLookupOrCreate(const std::vector<std::vector<int64>>& input_batches,
     for (int i = 0; i < num_thread; i++) {
       worker_threads[i] = std::thread(thread_lookup_or_create,
                                       ev, input_batches[k].data(),
+                                      default_value_matrix.data(),
+                                      default_value_dim,
                                       outputs.data(), value_size,
                                       thread_task_range[i].first,
                                       thread_task_range[i].second);
@@ -226,11 +235,11 @@ void thread_lookup(
     const int64* input_batch,
     float** outputs, int value_size,
     int start, int end) {
-  ValuePtr<float>* value_ptr = nullptr;
+  void* value_ptr = nullptr;
 	bool is_filter = false;
   for (int i = start; i < end; i++) {
     ev->LookupKey(input_batch[i], &value_ptr);
-    auto val = ev->flat(value_ptr, input_batch[i]);
+    auto val = ev->flat(value_ptr);
     memcpy(outputs[i], &val(0), sizeof(float) * value_size);
   }
 }
@@ -318,7 +327,7 @@ TEST(EmbeddingVariablePerformanceTest, TestLookup) {
 		}
 	}
   auto ev = CreateEmbeddingVar(value_size, default_value, default_value_dim);
-  ValuePtr<float>* value_ptr = nullptr;
+  void* value_ptr = nullptr;
   bool is_filter = false;
   for (int i = 0; i < hot_ids_list.size(); i++) {
     ev->LookupOrCreateKey(hot_ids_list[i], &value_ptr, &is_filter, false);
@@ -364,13 +373,13 @@ void PerfSave(Tensor& default_value,
       value_size, default_value,
       default_value_dim, 0, steps_to_live,
       l2_weight_threshold);
-  ValuePtr<float>* value_ptr = nullptr;
+  void* value_ptr = nullptr;
   bool is_filter = false;
   srand((unsigned)time(NULL));
 
   for (int i = 0; i < id_list.size(); i++) {
     ev->LookupOrCreateKey(id_list[i], &value_ptr, &is_filter, false);
-    ev->flat(value_ptr, id_list[i]);
+    ev->flat(value_ptr);
     int64 global_step = rand() % 100;
     ev->UpdateVersion(value_ptr, global_step);
   }
@@ -379,17 +388,10 @@ void PerfSave(Tensor& default_value,
   BundleWriter writer(Env::Default(), Prefix("foo"));
   timespec start, end;
   double total_time = 0.0;
-  if (steps_to_live != 0 || l2_weight_threshold != -1.0) {
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    embedding::ShrinkArgs shrink_args;
-    shrink_args.global_step = 100;
-    ev->Shrink(shrink_args);
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    total_time += (double)(end.tv_sec - start.tv_sec) *
-                  1000000000 + end.tv_nsec - start.tv_nsec;
-  }
+  embedding::ShrinkArgs shrink_args;
+  shrink_args.global_step = 100;
   clock_gettime(CLOCK_MONOTONIC, &start);
-  DumpEmbeddingValues(ev, "var", &writer, &part_offset_tensor);
+  ev->Save("var", Prefix("foo"), &writer, shrink_args);
   clock_gettime(CLOCK_MONOTONIC, &end);
   total_time += (double)(end.tv_sec - start.tv_sec) *
                  1000000000 + end.tv_nsec - start.tv_nsec;
@@ -571,7 +573,7 @@ void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
   }
   auto ev = CreateMultiTierEmbeddingVar(value_size, default_value,
                                default_value_dim, 0, 100, -1.0, cache_strategy, 16);
-  ValuePtr<float>* value_ptr = nullptr;
+  void* value_ptr = nullptr;
   bool is_filter = false;
   for (int i = 0; i < hot_ids_list.size(); i++) {
     ev->LookupOrCreateKey(hot_ids_list[i], &value_ptr, &is_filter, false);
@@ -650,7 +652,7 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
                             filter_freq);
   }
                                
-  std::vector<std::thread> worker_threads(num_thread + 1);
+  std::vector<std::thread> worker_threads(num_thread);
   double total_time = 0.0;
   timespec start, end;
   for (int k = 0; k < input_batches.size(); k++) {
@@ -673,22 +675,34 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
     for (int i = 0; i < num_thread; i++) {
       worker_threads[i] = std::thread(thread_lookup_or_create,
                                       ev, input_batches[k].data(),
+                                      default_value_matrix.data(),
+                                      default_value_dim,
                                       outputs.data(), value_size,
                                       thread_task_range[i].first,
                                       thread_task_range[i].second);
     }
     // Scaling cache capacity
-    if (k % 10 == 0) {
-      size_t old_capacity = ev->Cache()->get_capacity();
-      size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10,
-                                     static_cast<size_t>(1000));
-      LOG(INFO) << "Cache capacity scales from " << old_capacity << " to "
-                << new_capacity;
-      worker_threads[num_thread] =
-          std::thread([=]() { ev->Cache()->set_capacity(new_capacity); });
-    }
+    // if (k % 10 == 0) {
+    //   size_t old_capacity = ev->Cache()->get_capacity();
+    //   size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10,
+    //                                  static_cast<size_t>(1000));
+    //   LOG(INFO) << "Cache capacity scales from " << old_capacity << " to "
+    //             << new_capacity;
+    //   worker_threads[num_thread] =
+    //       std::thread([=]() { ev->Cache()->set_capacity(new_capacity); });
+    // }
     for (int i = 0; i < worker_threads.size(); i++) {
       worker_threads[i].join();
+    }
+    // Scaling cache capacity
+    if (k % 10 == 0) {
+      std::thread scale = std::thread([&](){
+        size_t old_capacity = ev->Cache()->get_capacity();
+        size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
+        LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
+        ev->Cache()->set_capacity(new_capacity);
+      });
+      scale.join();
     }
     clock_gettime(CLOCK_MONOTONIC, &end);
     if (k > 10)
@@ -711,16 +725,6 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
     for (auto ptr: outputs) {
       cpu_allocator()->DeallocateRaw(ptr);
     }
-    // Scaling cache capacity
-    // if (k % 10 == 0) {
-    //   std::thread scale = std::thread([&](){
-    //     size_t old_capacity = ev->Cache()->get_capacity();
-    //     size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
-    //     LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
-    //     ev->Cache()->set_capacity(new_capacity);
-    //   });
-    //   scale.join();
-    // }
   }
   ev->Unref();
   return total_time;

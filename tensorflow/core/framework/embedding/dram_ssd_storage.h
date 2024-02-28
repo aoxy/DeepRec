@@ -21,9 +21,6 @@ limitations under the License.
 #include "tensorflow/core/framework/embedding/single_tier_storage.h"
 
 namespace tensorflow {
-template <class V>
-class ValuePtr;
-
 template <class K, class V>
 class EmbeddingVar;
 
@@ -31,11 +28,12 @@ namespace embedding {
 template<typename K, typename V>
 class DramSsdHashStorage : public MultiTierStorage<K, V> {
  public:
-  DramSsdHashStorage(const StorageConfig& sc, Allocator* alloc,
-      LayoutCreator<V>* lc, const std::string& name)
-      : MultiTierStorage<K, V>(sc, name) {
-    dram_= new DramStorage<K, V>(sc, alloc, lc, new LocklessHashMap<K, V>());
-    ssd_hash_ = new SsdHashStorage<K, V>(sc, alloc, lc);
+  DramSsdHashStorage(const StorageConfig& sc,
+      FeatureDescriptor<V>* feat_desc, const std::string& name)
+      : dram_feat_desc_(feat_desc),
+        MultiTierStorage<K, V>(sc, name) {
+    dram_= new DramStorage<K, V>(sc, feat_desc);
+    ssd_hash_ = new SsdHashStorage<K, V>(sc, feat_desc);
   }
 
   ~DramSsdHashStorage() override {
@@ -46,7 +44,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
 
   TF_DISALLOW_COPY_AND_ASSIGN(DramSsdHashStorage);
 
-  Status Get(K key, ValuePtr<V>** value_ptr) override {
+  Status Get(K key, void** value_ptr) override {
     this->cache_->update(&key, 1);
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
@@ -65,24 +63,22 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
     return s;
   }
 
-  void Insert(K key, ValuePtr<V>* value_ptr) override {
-    LOG(FATAL)<<"Unsupport Insert(K, ValuePtr<V>*) in DramSsdHashStorage.";
+  void Insert(K key, void** value_ptr) override {
+    dram_->Insert(key, value_ptr);
   }
 
-  void Insert(K key, ValuePtr<V>** value_ptr,
-              size_t alloc_len, bool to_dram = false) override {
-    dram_->Insert(key, value_ptr, alloc_len);
+  void CreateAndInsert(K key, void** value_ptr,
+      bool to_dram = false) override {
+    dram_->CreateAndInsert(key, value_ptr);
   }
 
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size, CopyBackFlag &need_copyback) override {
-    LOG(FATAL)<<"GetOrCreate(K key, ValuePtr<V>** value_ptr, "
-              <<"size_t size, CopyBackFlag &need_copyback) "
-              <<"in DramSsdStorage can not be called.";
+  void Import(K key, V* value,
+              int64 freq, int64 version,
+              int emb_index) override {
+    dram_->Import(key, value, freq, version, emb_index);
   }
 
-  Status GetOrCreate(K key, ValuePtr<V>** value_ptr,
-      size_t size) override {
+  Status GetOrCreate(K key, void** value_ptr) override {
     this->cache_->update(&key, 1);
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
@@ -98,7 +94,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
       ssd_hash_->DestroyValuePtr(*value_ptr);
       return dram_->Get(key, value_ptr);
     }
-    dram_->Insert(key, value_ptr, size);
+    dram_->CreateAndInsert(key, value_ptr);
     return Status::OK();
   }
 
@@ -146,76 +142,26 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
     return true;
   }
 
-  Status GetSnapshot(std::vector<K>* key_list,
-      std::vector<ValuePtr<V>*>* value_ptr_list) override {
-    {
-     mutex_lock l(*(dram_->get_mutex()));
-      TF_CHECK_OK(dram_->GetSnapshot(key_list, value_ptr_list));
-    }
-    {
-      mutex_lock l(*(ssd_hash_->get_mutex()));
-      TF_CHECK_OK(ssd_hash_->GetSnapshot(key_list, value_ptr_list));
-    }
-    return Status::OK();
-  }
-
-  Status Shrink(const ShrinkArgs& shrink_args) override {
-    dram_->Shrink(shrink_args);
-    ssd_hash_->Shrink(shrink_args);
-    return Status::OK();
-  }
-
-  int64 GetSnapshot(std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
+  Status Save(
+      const string& tensor_name,
+      const string& prefix,
+      BundleWriter* writer,
       const EmbeddingConfig& emb_config,
-      FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
-      embedding::Iterator** it) override {
-    {
-      mutex_lock l(*(dram_->get_mutex()));
-      std::vector<ValuePtr<V>*> value_ptr_list;
-      std::vector<K> key_list_tmp;
-      TF_CHECK_OK(dram_->GetSnapshot(&key_list_tmp, &value_ptr_list));
-      MultiTierStorage<K, V>::SetListsForCheckpoint(
-          key_list_tmp, value_ptr_list, emb_config,
-          key_list, value_list, version_list, freq_list);
-    }
-    {
-      mutex_lock l(*(ssd_hash_->get_mutex()));
-      *it = ssd_hash_->GetIterator();
-    }
-    return key_list->size();
-  }
+      ShrinkArgs& shrink_args,
+      int64 value_len,
+      V* default_value) override {
+    dram_->Save(tensor_name, prefix, writer, emb_config,
+                shrink_args, value_len, default_value);
 
-  int64 GetSnapshotWithoutFetchPersistentEmb(
-      std::vector<K>* key_list,
-      std::vector<V*>* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
-      const EmbeddingConfig& emb_config,
-      SsdRecordDescriptor<K>* ssd_rec_desc) override {
-    {
-      mutex_lock l(*(dram_->get_mutex()));
-      std::vector<ValuePtr<V>*> value_ptr_list;
-      std::vector<K> temp_key_list;
-      TF_CHECK_OK(dram_->GetSnapshot(&temp_key_list, &value_ptr_list));
-      MultiTierStorage<K, V>::SetListsForCheckpoint(
-          temp_key_list, value_ptr_list, emb_config,
-          key_list, value_list, version_list,
-          freq_list);
-    }
-    {
-      mutex_lock l(*(ssd_hash_->get_mutex()));
-      ssd_hash_->SetSsdRecordDescriptor(ssd_rec_desc);
-    }
-    return key_list->size() + ssd_rec_desc->key_list.size();
+    ssd_hash_->Save(tensor_name, prefix, writer, emb_config,
+                    shrink_args, value_len, default_value);
+
+    return Status::OK();
   }
 
   Status RestoreSSD(int64 emb_index, int64 emb_slot_num, int64 value_len,
                     const std::string& ssd_emb_file_name, EmbeddingVar<K, V>* ev,
                     RestoreSSDBuffer<K>& restore_buff) override {
-    int64 alloc_len = Storage<K, V>::ComputeAllocLen(value_len);
     std::map<int64, int64> file_id_map;
     for (int64 i = 0; i < restore_buff.num_of_files; i++) {
       file_id_map[restore_buff.file_list_buf[i]] = i;
@@ -236,7 +182,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   Status Eviction(K* evict_ids, int64 evict_size) override {
-    ValuePtr<V>* value_ptr = nullptr;
+    void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
         TF_CHECK_OK(ssd_hash_->Commit(evict_ids[i], value_ptr));
@@ -250,8 +196,8 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) override {
     mutex_lock l(*(dram_->get_mutex()));
     mutex_lock l1(*(ssd_hash_->get_mutex()));
-    MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->alloc_);
-    ValuePtr<V>* value_ptr = nullptr;
+    MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->feature_descriptor());
+    void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
         TF_CHECK_OK(ssd_hash_->Commit(evict_ids[i], value_ptr));
@@ -262,14 +208,25 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
     return Status::OK();
   }
 
+  void UpdateValuePtr(K key, void* new_value_ptr,
+                      void* old_value_ptr) override {
+    dram_->UpdateValuePtr(key, new_value_ptr, old_value_ptr);
+  }
+
+  void Init() override {
+    ssd_hash_->Init();
+    MultiTierStorage<K, V>::Init();
+  }
+
  protected:
-  void SetTotalDims(int64 total_dims) override {
-    ssd_hash_->SetTotalDims(total_dims);
+  int total_dim() override {
+    return dram_feat_desc_->total_dim();
   }
 
  private:
   DramStorage<K, V>* dram_ = nullptr;
   SsdHashStorage<K, V>* ssd_hash_ = nullptr;
+  FeatureDescriptor<V>* dram_feat_desc_;
 };
 } // embedding
 } // tensorflow

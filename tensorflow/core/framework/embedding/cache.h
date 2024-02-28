@@ -281,7 +281,7 @@ static thread_local int sync_idx = -1;
 template <class K>
 class BlockLockLFUCache : public BatchCache<K> {
  public:
-  BlockLockLFUCache(size_t capacity, size_t way, int num_threads)
+  BlockLockLFUCache(size_t capacity, size_t way, int num_threads=8)
       : evic_idx_(0),
         num_threads_(num_threads),
         way_(way),

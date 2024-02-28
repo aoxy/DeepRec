@@ -31,10 +31,11 @@ limitations under the License.
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/core/status.h"
 
-namespace tensorflow {
-template<typename V>
-class ValuePtr;
+#if GOOGLE_CUDA
+#include "tensorflow/core/framework/embedding/batch.h"
+#endif
 
+namespace tensorflow {
 template<typename K, typename V>
 class EmbeddingVar;
 
@@ -55,24 +56,10 @@ class MultiTierStorage : public Storage<K, V> {
 
   TF_DISALLOW_COPY_AND_ASSIGN(MultiTierStorage);
 
-  void SetAllocLen(int64 value_len, int slot_num) override {
-    while (Storage<K, V>::flag_.test_and_set(std::memory_order_acquire));
-    // The start address of every slot should be aligned to 16 bytes,
-    // otherwise a coredump will happen in the ApplyOp.
-    Storage<K, V>::alloc_len_ = Storage<K, V>::ComputeAllocLen(value_len);
-
-    int64 temp = Storage<K, V>::alloc_len_ * slot_num;
-    // LOG(INFO) << "Enter -----> SetAllocLen -> temp = " << temp;
-    // LOG(INFO) << "Enter -----> SetAllocLen -> Storage<K, V>::total_dims_ = " << Storage<K, V>::total_dims_;
-    if (temp > Storage<K, V>::total_dims_) {
-      Storage<K, V>::total_dims_ = temp;
-      SetTotalDims(Storage<K, V>::total_dims_);
-
-      cache_capacity_ = Storage<K, V>::storage_config_.size[0]
-                        / (Storage<K, V>::total_dims_ * sizeof(V));
-      ready_eviction_ = true;
-    }
-    Storage<K, V>::flag_.clear(std::memory_order_release);
+  virtual void Init() override {
+    cache_capacity_ = Storage<K, V>::storage_config_.size[0]
+                      / (total_dim() * sizeof(V));
+    ready_eviction_ = true;
   }
 
   int64 CacheSize() const override {
@@ -84,29 +71,39 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   void InitCache(embedding::CacheStrategy cache_strategy, int num_threads) override {
-    LOG(INFO) << "Enter -----> InitCache -> cache_capacity_ = " << cache_capacity_;
-    cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_, num_threads);
-    eviction_manager_ = EvictionManagerCreator::Create<K, V>();
-    eviction_manager_->AddStorage(this);
-    cache_thread_pool_ = CacheThreadPoolCreator::Create();
+    if (cache_ == nullptr) {
+      LOG(INFO) << "Enter -----> InitCache -> cache_capacity_ = " << cache_capacity_;
+      cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_, num_threads);
+      eviction_manager_ = EvictionManagerCreator::Create<K, V>();
+      eviction_manager_->AddStorage(this);
+      cache_thread_pool_ = CacheThreadPoolCreator::Create();
+    }
   }
 
   Status BatchCommit(const std::vector<K>& keys,
-      const std::vector<ValuePtr<V>*>& value_ptrs) override {
+      const std::vector<void*>& value_ptrs) override {
     LOG(FATAL)<<"BatchCommit isn't supported by MultiTierStorage.";
     return Status::OK();
   }
 
-  embedding::Iterator* GetIterator() {
-    LOG(FATAL)<<"GetIterator isn't support by MultiTierStorage.";
-    return nullptr;
+  Status GetSnapshot(std::vector<K>* key_list,
+      std::vector<void*>* value_ptr_list) override {
+    LOG(FATAL)<<"Can't get snapshot of MultiTierStorage.";
+    return Status::OK();
+  }
+
+  Status GetShardedSnapshot(
+      std::vector<K>* key_list, std::vector<void*>* value_ptr_list,
+      int partition_id, int partition_nums) override {
+    LOG(FATAL)<<"Can't get sharded snapshot of MultiTierStorage.";
+    return Status::OK();
   }
 
   void CopyEmbeddingsFromCPUToGPU(
       int total, const K* keys,
       const std::list<int64>& copyback_cursor,
       V** memcpy_address, size_t value_len,
-      ValuePtr<V> **gpu_value_ptrs,
+      void **gpu_value_ptrs,
       V* memcpy_buffer_gpu,
       se::Stream* compute_stream,
       EventMgr* event_mgr,
@@ -114,72 +111,9 @@ class MultiTierStorage : public Storage<K, V> {
     LOG(FATAL) << "Unsupport CopyEmbeddingsFromCPUToGPU in MultiTierStorage.";
   };
 
-  void SetListsForCheckpoint(
-      const std::vector<K>& input_key_list,
-      const std::vector<ValuePtr<V>*>& input_value_ptr_list,
-      const EmbeddingConfig& emb_config,
-      std::vector<K>* output_key_list,
-      std::vector<V*>* output_value_list,
-      std::vector<int64>* output_version_list,
-      std::vector<int64>* output_freq_list) {
-    for (int64 i = 0; i < input_key_list.size(); ++i) {
-      output_key_list->emplace_back(input_key_list[i]);
-
-      //NormalContiguousValuePtr is used, GetFreq() is valid.
-      int64 dump_freq = input_value_ptr_list[i]->GetFreq();
-      output_freq_list->emplace_back(dump_freq);
-
-      if (emb_config.steps_to_live != 0 || emb_config.record_version) {
-        int64 dump_version = input_value_ptr_list[i]->GetStep();
-        output_version_list->emplace_back(dump_version);
-      }
-
-      V* val = input_value_ptr_list[i]->GetValue(emb_config.emb_index,
-          Storage<K, V>::GetOffset(emb_config.emb_index));
-      V* primary_val = input_value_ptr_list[i]->GetValue(
-          emb_config.primary_emb_index,
-          Storage<K, V>::GetOffset(emb_config.primary_emb_index));
-      /* Classify features into 3 categories:
-        1. filtered
-        2. not involved in backward
-        3. normal
-      */
-      if (primary_val == nullptr) {
-        output_value_list->emplace_back(nullptr);
-      } else {
-        if (val == nullptr) {
-          output_value_list->emplace_back(reinterpret_cast<V*>(-1));
-        } else {
-          output_value_list->emplace_back(val);
-        }
-      }
-    }
-  }
-
-  virtual int64 GetSnapshotWithoutFetchPersistentEmb(
-      std::vector<K>* key_list,
-      std::vector<V* >* value_list,
-      std::vector<int64>* version_list,
-      std::vector<int64>* freq_list,
-      const EmbeddingConfig& emb_config,
-      SsdRecordDescriptor<K>* ssd_rec_desc) override {
-    LOG(FATAL)<<"The Storage dosen't use presisten memory"
-              <<" or this storage hasn't suppported"
-              <<" GetSnapshotWithoutFetchPersistentEmb yet";
-    return -1;
-  }
-
   Status Contains(K key) override {
     LOG(FATAL)<<"Contains is not support in MultiTierStorage.";
     return Status::OK();
-  }
-
-  void iterator_mutex_lock() override {
-    return;
-  }
-
-  void iterator_mutex_unlock() override {
-    return;
   }
 
   bool IsMultiLevel() override {
@@ -190,17 +124,6 @@ class MultiTierStorage : public Storage<K, V> {
       Allocator* alloc,
       int64 value_len,
       int64 block_size) override {
-    return;
-  }
-
-  void AllocateMemoryForNewFeatures(
-      const std::vector<ValuePtr<V>*>& value_ptr_list) override {
-    return;
-  }
-
-  void AllocateMemoryForNewFeatures(
-      ValuePtr<V>** value_ptr_list,
-      int64 num_of_value_ptrs) override {
     return;
   }
 
@@ -265,7 +188,6 @@ class MultiTierStorage : public Storage<K, V> {
     // });
   }
 
- protected:
   Status RestoreFeatures(int64 key_num, int bucket_num, int64 partition_id,
                          int64 partition_num, int64 value_len, bool is_filter,
                          bool is_incr, const EmbeddingConfig& emb_config,
@@ -296,50 +218,50 @@ class MultiTierStorage : public Storage<K, V> {
     // }
     return s;
   }
- 
-  virtual void SetTotalDims(int64 total_dims) = 0;
+  virtual int total_dim() = 0;
 
   void DeleteFromEvictionManager() {
     eviction_manager_->DeleteStorage(this);
   }
 
-  void ReleaseValuePtrs(std::deque<ValuePtr<V>*>& value_ptrs,
-                        Allocator* allocator) {
+  void ReleaseValuePtrs(std::deque<void*>& value_ptrs,
+                        FeatureDescriptor<V>* feat_desc) {
     constexpr int CAP_INVALID_VALUEPTR = 64 * 1024;
     if (value_ptrs.size() > CAP_INVALID_VALUEPTR) {
       int64 num_of_deleted_value_ptrs =
           value_ptrs.size() - CAP_INVALID_VALUEPTR;
       for (int i = 0; i < num_of_deleted_value_ptrs; i++) {
-        ValuePtr<V>* value_ptr = value_ptrs.front();
-        value_ptr->Destroy(allocator);
-        delete value_ptr;
+        void* value_ptr = value_ptrs.front();
+        feat_desc->Deallocate(value_ptr);
         value_ptrs.pop_front();
       }
     }
   }
 
-  void ReleaseInvalidValuePtr(Allocator* allocator) {
-    ReleaseValuePtrs(value_ptr_out_of_date_, allocator);
+  void ReleaseInvalidValuePtr(FeatureDescriptor<V>* feat_desc) {
+    ReleaseValuePtrs(value_ptr_out_of_date_, feat_desc);
   }
 
-  void KeepInvalidValuePtr(ValuePtr<V>* value_ptr) {
+  void KeepInvalidValuePtr(void* value_ptr) {
     value_ptr_out_of_date_.emplace_back(value_ptr);
   }
 
 #if GOOGLE_CUDA
   void CopyEmbeddingsFromDramToHbm(const EmbeddingVarContext<GPUDevice>& context,
                                    const K* keys,
-                                   ValuePtr<V>** value_ptr_list,
+                                   void** value_ptr_list,
                                    std::list<int64>& copyback_cursors,
                                    const std::vector<int64>& memory_index,
-                                   const std::vector<ValuePtr<V>*>& gpu_value_ptrs,
-                                   int value_len);
+                                   const std::vector<void*>& gpu_value_ptrs,
+                                   int value_len,
+                                   FeatureDescriptor<V>* hbm_feat_desc,
+                                   FeatureDescriptor<V>* dram_feat_desc);
 #endif //GOOGL_CUDA
  private:
   virtual Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) {}
 
  protected:
-  std::deque<ValuePtr<V>*> value_ptr_out_of_date_;
+  std::deque<void*> value_ptr_out_of_date_;
   BatchCache<K>* cache_ = nullptr;
 
   EvictionManager<K, V>* eviction_manager_;
@@ -354,6 +276,70 @@ class MultiTierStorage : public Storage<K, V> {
   std::string name_;
   std::vector<mutex> mu_list_;
 };
+
+#if GOOGLE_CUDA
+template <class V>
+void CopyEmbeddingFromHbmToDram(
+    const std::vector<void*>& hbm_value_ptrs,
+    const std::vector<void*>& dram_value_ptrs,
+    Allocator* gpu_alloc,
+    FeatureDescriptor<V>* hbm_feat_desc,
+    FeatureDescriptor<V>* dram_feat_desc) {
+  int batch_size = hbm_value_ptrs.size();
+    V** dev_value_address;
+
+  dev_value_address = (V**)gpu_alloc->AllocateRaw(
+      Allocator::kAllocatorAlignment, batch_size * sizeof(V*));
+  Allocator* cpu_alloc = ev_allocator();
+  V** value_address = (V**)cpu_alloc->AllocateRaw(
+      Allocator::kAllocatorAlignment, sizeof(V*) * batch_size);
+
+  V* batch_data_place;
+  V* dev_batch_data_place;
+  int total_dim = dram_feat_desc->total_dim();
+  dev_batch_data_place = (V*)gpu_alloc->AllocateRaw(
+      Allocator::kAllocatorAlignment, sizeof(V) * batch_size * total_dim);
+  batch_data_place = (V *)cpu_alloc->AllocateRaw(
+      Allocator::kAllocatorAlignment, sizeof(V) * batch_size * total_dim);
+  // Copy GPU addresses V*
+  for(int i = 0; i < batch_size; ++i) {
+    value_address[i] = hbm_feat_desc->GetEmbedding(hbm_value_ptrs[i], 0);
+  }
+  cudaMemcpyAsync(dev_value_address, value_address,
+                  sizeof(V*) * batch_size,
+                  cudaMemcpyHostToDevice);
+
+  // Launch Kernel,Copy data to continuous place
+  int block_dim = 128;
+  void* args[] = { (void*)&dev_value_address,
+      (void*)&dev_batch_data_place, (void*)&total_dim,
+      (void*)&batch_size};
+
+  cudaLaunchKernel((void *)BatchCopy<V>,
+                    (batch_size * total_dim + block_dim - 1) / block_dim,
+                    block_dim, args, 0, NULL);
+
+  cudaMemcpyAsync(batch_data_place, dev_batch_data_place,
+                  sizeof(V) * batch_size * total_dim,
+                  cudaMemcpyDeviceToHost);
+
+  cudaEvent_t is_finish_;
+  cudaEventCreate(&is_finish_);
+  cudaEventRecord(is_finish_);
+  cudaEventSynchronize(is_finish_);
+  cudaEventDestroy(is_finish_);
+  
+  for(int i = 0; i < batch_size; ++i) {
+    memcpy(dram_feat_desc->GetEmbedding(dram_value_ptrs[i], 0),
+        &batch_data_place[i * total_dim], total_dim * sizeof(V));
+  }
+
+  cpu_alloc->DeallocateRaw(value_address);
+  cpu_alloc->DeallocateRaw(batch_data_place);
+  gpu_alloc->DeallocateRaw(dev_value_address);
+  gpu_alloc->DeallocateRaw(dev_batch_data_place);
+}
+#endif //GOOGL_CUDA
 } // embedding
 } // tensorflow
 

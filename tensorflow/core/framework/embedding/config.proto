@@ -51,3 +51,13 @@ enum EmbeddingVariableType {
   IMMUTABLE = 0;
   MUTABLE = 1;
 }
+
+enum ValuePtrStatus {
+  OK = 0;
+  IS_DELETED = 1;
+  NOT_IN_DRAM = 2;
+}
+
+enum IsSetInitialized {
+  NOT_SET_INITAILIZED = 0;
+}
