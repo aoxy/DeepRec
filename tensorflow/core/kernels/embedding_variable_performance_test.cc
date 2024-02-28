@@ -650,7 +650,7 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
                             filter_freq);
   }
                                
-  std::vector<std::thread> worker_threads(num_thread);
+  std::vector<std::thread> worker_threads(num_thread + 1);
   double total_time = 0.0;
   timespec start, end;
   for (int k = 0; k < input_batches.size(); k++) {
@@ -678,14 +678,15 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
                                       thread_task_range[i].second);
     }
     // Scaling cache capacity
-    // if (k % 10 == 0) {
-    //   worker_threads.emplace_back([&](){
-    //     size_t old_capacity = ev->Cache()->get_capacity();
-    //     size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
-    //     LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
-    //     ev->Cache()->set_capacity(new_capacity);
-    //   });
-    // }
+    if (k % 10 == 0) {
+      size_t old_capacity = ev->Cache()->get_capacity();
+      size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10,
+                                     static_cast<size_t>(1000));
+      LOG(INFO) << "Cache capacity scales from " << old_capacity << " to "
+                << new_capacity;
+      worker_threads[num_thread] =
+          std::thread([=]() { ev->Cache()->set_capacity(new_capacity); });
+    }
     for (int i = 0; i < worker_threads.size(); i++) {
       worker_threads[i].join();
     }
@@ -711,15 +712,15 @@ double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_ba
       cpu_allocator()->DeallocateRaw(ptr);
     }
     // Scaling cache capacity
-    if (k % 10 == 0) {
-      std::thread scale = std::thread([&](){
-        size_t old_capacity = ev->Cache()->get_capacity();
-        size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
-        LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
-        ev->Cache()->set_capacity(new_capacity);
-      });
-      scale.join();
-    }
+    // if (k % 10 == 0) {
+    //   std::thread scale = std::thread([&](){
+    //     size_t old_capacity = ev->Cache()->get_capacity();
+    //     size_t new_capacity = std::max(((rand() % 20) + 5) * old_capacity / 10, static_cast<size_t>(1000));
+    //     LOG(INFO) << "Cache capacity scales from " << old_capacity << " to " << new_capacity;
+    //     ev->Cache()->set_capacity(new_capacity);
+    //   });
+    //   scale.join();
+    // }
   }
   ev->Unref();
   return total_time;
