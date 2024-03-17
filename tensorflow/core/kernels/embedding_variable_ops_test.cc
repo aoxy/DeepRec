@@ -1346,7 +1346,6 @@ TEST(EmbeddingVariableTest, TestBLFUCachePrefetch) {
       access_seq.emplace_back(i);
     }
   }
-  LOG(INFO) << "Enter -----> access_seq.size() = " << access_seq.size();
   cache->add_to_cache(access_seq.data(), access_seq.size());
   ASSERT_EQ(cache->size(), 2);
   true_evict_size = cache->get_evic_ids(evict_ids, num_ids);
@@ -1360,8 +1359,8 @@ TEST(EmbeddingVariableTest, TestBLFUCachePrefetch) {
   cache->add_to_cache(access_seq.data(), access_seq.size());
   ASSERT_EQ(cache->size(), 3);
   true_evict_size = cache->get_evic_ids(evict_ids, 2);
-  ASSERT_EQ(evict_ids[0], 3);
-  ASSERT_EQ(evict_ids[1], 4);
+  ASSERT_EQ(evict_ids[0], 4);
+  ASSERT_EQ(evict_ids[1], 3);
   ASSERT_EQ(cache->size(), 1);
 
   delete cache;

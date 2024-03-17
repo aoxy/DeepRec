@@ -340,6 +340,10 @@ class HbmDramStorage : public MultiTierStorage<K, V> {
   int total_dim() override {
     return hbm_feat_desc_->total_dim();
   }
+
+  int data_bytes() override {
+    return hbm_feat_desc_->data_bytes();
+  }
  private:
   void BatchGetValuePtrs(
       const EmbeddingVarContext<GPUDevice>& ctx,

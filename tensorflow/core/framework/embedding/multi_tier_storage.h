@@ -57,8 +57,9 @@ class MultiTierStorage : public Storage<K, V> {
   TF_DISALLOW_COPY_AND_ASSIGN(MultiTierStorage);
 
   virtual void Init() override {
-    cache_capacity_ = Storage<K, V>::storage_config_.size[0]
-                      / (total_dim() * sizeof(V));
+    LOG(INFO) << "Enter -----> MultiTierStorage::Init -> total_dim= " << total_dim();
+    LOG(INFO) << "Enter -----> MultiTierStorage::Init -> data_bytes= " << data_bytes();
+    cache_capacity_ = std::min(Storage<K, V>::storage_config_.size[0] / data_bytes(), 1 << 6);
     ready_eviction_ = true;
   }
 
@@ -72,7 +73,9 @@ class MultiTierStorage : public Storage<K, V> {
 
   void InitCache(embedding::CacheStrategy cache_strategy, int num_threads) override {
     if (cache_ == nullptr) {
-      LOG(INFO) << "Enter -----> InitCache -> cache_capacity_ = " << cache_capacity_;
+      LOG(INFO) << "Enter -----> MultiTierStorage::InitCache -> total_dim = " << total_dim();
+      LOG(INFO) << "Enter -----> MultiTierStorage::InitCache -> data_bytes = " << data_bytes();
+      LOG(INFO) << "Enter -----> MultiTierStorage::InitCache -> cache_capacity_ = " << cache_capacity_;
       cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_, num_threads);
       eviction_manager_ = EvictionManagerCreator::Create<K, V>();
       eviction_manager_->AddStorage(this);
@@ -219,6 +222,8 @@ class MultiTierStorage : public Storage<K, V> {
     return s;
   }
   virtual int total_dim() = 0;
+
+  virtual int data_bytes() = 0;
 
   void DeleteFromEvictionManager() {
     eviction_manager_->DeleteStorage(this);

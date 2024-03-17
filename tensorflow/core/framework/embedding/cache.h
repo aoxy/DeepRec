@@ -571,8 +571,8 @@ class BlockLockLFUCache : public BatchCache<K> {
           curr_block.full = !insert;
         } else {
           min_j = 0;
-          min_count = std::numeric_limits<size_t>::max();
-          for (size_t j = 0; j < curr_cached.size(); ++j) {
+          min_count = curr_cached[0].count;
+          for (size_t j = 1; j < curr_cached.size(); ++j) {
             if (min_count > curr_cached[j].count) {
               min_count = curr_cached[j].count;
               min_j = j;
@@ -657,6 +657,11 @@ class BlockLockLFUCache : public BatchCache<K> {
   }
 
  private:
+  struct alignas(64) SizeDataBlock {
+    size_t val;  // Padding to fill one cache line (64 bytes)
+    char _padding[64 - sizeof(size_t)];
+    SizeDataBlock() : val(0) {}
+  };
   class CacheItem {
    public:
     K id;

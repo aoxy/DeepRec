@@ -263,6 +263,8 @@ class InitializeKvVariableOp : public OpKernel {
 
     EmbeddingVar<TKey, TValue>* ev = nullptr;
 
+    LOG(INFO) << "---------------" << is_inference_ << "--" << slot_num_;
+
     if (handle_self.name() == handle_primary.name() &&
         handle_self.container() == handle_primary.container()) {
 

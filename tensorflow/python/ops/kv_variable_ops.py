@@ -429,7 +429,11 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                                   config_pb2.StorageType.HBM_DRAM_SSDHASH]
               return storage_type in multi_level_list
             self._is_multi_tier = is_multi_tier(self._storage_type)
-            if self._is_multi_tier and self._total_slot_num is not None and len(self._primary._slots_init_ops) == self._total_slot_num:
+            infer = os.environ.get("INFERENCE_MODE", "[null-inf1]")
+            print(f"===={self._is_multi_tier}={self._total_slot_num}={len(self._primary._slots_init_ops)}=infer={infer}===================")
+            # if self._is_multi_tier and self._total_slot_num is not None and len(self._primary._slots_init_ops) == self._total_slot_num:
+            if self._is_multi_tier and self._primary._slots_init_ops:
+              print("========Add kv_resource_init_cache_strategy_op=============")
               with ops.control_dependencies(self._primary._slots_init_ops):
                 self._set_cache_strategy_op = gen_kv_variable_ops.kv_resource_init_cache_strategy_op(
                   self._handle,
@@ -486,7 +490,11 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
               embedding_variable_type=config_pb2.EmbeddingVariableType.IMMUTABLE)
           self._primary._slots_init_ops_for_restore.append(self._initializer_for_restore)
         set_attr_ops = []
-        if self._is_multi_tier and self._total_slot_num is not None and len(self._primary._slots_init_ops_for_restore) == self._total_slot_num:
+        infer = os.environ.get("INFERENCE_MODE", "[null-inf]")
+        print(f"++++{self._is_multi_tier}={self._total_slot_num}={len(self._primary._slots_init_ops)}+infer={infer}++++++++++")
+        # if self._is_multi_tier and self._total_slot_num is not None and len(self._primary._slots_init_ops_for_restore) == self._total_slot_num:
+        if self._is_multi_tier and self._primary._slots_init_ops_for_restore:
+          print("+++++++++++Add kv_resource_init_cache_strategy_op+++++++++++")
           with ops.control_dependencies(self._primary._slots_init_ops_for_restore):
             set_cache_op = gen_kv_variable_ops.kv_resource_init_cache_strategy_op(
                 self._handle,

@@ -193,6 +193,8 @@ class SSDHashKV : public KVInterface<K, V> {
     max_app_count_ = BUFFER_SIZE / val_len_;
     write_buffer_ = new char[BUFFER_SIZE];
     unsigned int max_key_count = 1 + int(BUFFER_SIZE / val_len_);
+    LOG(INFO) << "val_len_ = " << val_len_;
+    LOG(INFO) << "max_key_count = " << max_key_count;
     key_buffer_ = new K[max_key_count];
     done_ = true;
   }
