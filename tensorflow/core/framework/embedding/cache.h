@@ -48,8 +48,8 @@ class BatchCache {
   virtual void add_to_prefetch_list(const K* batch_ids, size_t batch_size) = 0;
   virtual void add_to_cache(const K* batch_ids, size_t batch_size) = 0;
   virtual size_t size() = 0;
-  virtual size_t get_capacity() { return 0; }
-  virtual void set_capacity(size_t new_capacity) {}
+  virtual size_t get_capacity() = 0;
+  virtual void set_capacity(size_t new_capacity) = 0;
   virtual void reset_status() {
     *num_hit = 0;
     *num_miss = 0;
@@ -127,7 +127,7 @@ class PrefetchLFUNode : public PrefetchNode<K> {
 template <class K>
 class LRUCache : public BatchCache<K> {
  public:
-  LRUCache() {
+  LRUCache(size_t capacity) : capacity_(capacity) {
     mp.clear();
     head = new LRUNode(0);
     tail = new LRUNode(0);
@@ -141,6 +141,10 @@ class LRUCache : public BatchCache<K> {
     mutex_lock l(mu_);
     return mp.size();
   }
+
+  size_t get_capacity() override { return capacity_; }
+
+  void set_capacity(size_t new_capacity) override {}
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
     mutex_lock l(mu_);
@@ -254,6 +258,7 @@ class LRUCache : public BatchCache<K> {
     LRUNode(K id) : id(id), pre(nullptr), next(nullptr) {}
   };
   LRUNode *head, *tail;
+  size_t capacity_;
   std::map<K, LRUNode*> mp;
   std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
   mutex mu_;
@@ -708,7 +713,7 @@ const K BlockLockLFUCache<K>::EMPTY_CACHE_ = -1;
 template <class K>
 class LFUCache : public BatchCache<K> {
  public:
-  LFUCache() {
+  LFUCache(size_t capacity) : capacity_(capacity) {
     min_freq = std::numeric_limits<size_t>::max();
     max_freq = 0;
     freq_table.emplace_back(
@@ -716,6 +721,10 @@ class LFUCache : public BatchCache<K> {
     BatchCache<K>::num_hit = new int64();
     BatchCache<K>::num_miss = new int64();
   }
+
+  size_t get_capacity() override { return capacity_; }
+
+  void set_capacity(size_t new_capacity) override {}
 
   size_t size() {
     mutex_lock l(mu_);
@@ -750,10 +759,18 @@ class LFUCache : public BatchCache<K> {
     mutex_lock l(mu_);
     size_t true_size = 0;
     size_t st_freq = min_freq;
+    // for (int i = st_freq - 1; i < freq_table.size(); i++) {
+    //   LOG(INFO) << "Len " << i;
+    //   for (auto it : *freq_table[i].first) {
+    //     std::cout << it.key << ", " << it.freq << "->";
+    //   }
+    //   std::cout << std::endl;
+    // }
     for (size_t i = 0; i < k_size && key_table.size() > 0; ++i) {
       auto rm_it = freq_table[st_freq - 1].first->back();
       key_table.erase(rm_it.key);
       evic_ids[i] = rm_it.key;
+      // LOG(INFO) << "Evict " << rm_it.key;
       ++true_size;
       freq_table[st_freq - 1].first->pop_back();
       freq_table[st_freq - 1].second--;
@@ -780,6 +797,7 @@ class LFUCache : public BatchCache<K> {
     auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
+      // LOG(INFO) << "Insert " << id;
       auto it = key_table.find(id);
       if (it == key_table.end()) {
         freq_table[0].first->emplace_front(LFUNode(id, 1));
@@ -816,6 +834,7 @@ class LFUCache : public BatchCache<K> {
     auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
+      // LOG(INFO) << "Insert " << id;
       auto it = key_table.find(id);
       size_t freq = batch_freqs[i];
       if (it == key_table.end()) {
@@ -962,6 +981,7 @@ class LFUCache : public BatchCache<K> {
   };
   size_t min_freq;
   size_t max_freq;
+  size_t capacity_;
   std::vector<std::pair<std::list<LFUNode>*, int64>> freq_table;
   std::unordered_map<K, typename std::list<LFUNode>::iterator> key_table;
   std::unordered_map<K, PrefetchLFUNode<K>*> prefetch_id_table;

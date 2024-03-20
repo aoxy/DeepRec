@@ -263,7 +263,7 @@ class InitializeKvVariableOp : public OpKernel {
 
     EmbeddingVar<TKey, TValue>* ev = nullptr;
 
-    LOG(INFO) << "---------------" << is_inference_ << "--" << slot_num_;
+    // LOG(INFO) << "--------------inference = " << is_inference_ << "--slot_num_ = " << slot_num_;
 
     if (handle_self.name() == handle_primary.name() &&
         handle_self.container() == handle_primary.container()) {
@@ -531,7 +531,9 @@ class KvResourceInitCacheStrategyOp : public OpKernel {
     OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &ev));
     core::ScopedUnref unref_me(ev);
     auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
-    ev->InitCache(static_cast<embedding::CacheStrategy>(cache_strategy_), worker_threads.num_threads);
+    if (ev->IsAllSlotsInitialized()) {
+      ev->InitCache(static_cast<embedding::CacheStrategy>(cache_strategy_), worker_threads.num_threads);
+    }
   }
 
  private:

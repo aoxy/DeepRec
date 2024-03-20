@@ -28,11 +28,11 @@ class CacheFactory {
       case CacheStrategy::LRU:
         LOG(INFO) << " Use Strategy::LRU in multi-tier EmbeddingVariable "
                 << name;
-        return new LRUCache<K>();
+        return new LRUCache<K>(capacity);
       case CacheStrategy::LFU:
         LOG(INFO) << " Use Strategy::LFU in multi-tier EmbeddingVariable "
                 << name;
-        return new LFUCache<K>();
+        return new LFUCache<K>(capacity);
       case CacheStrategy::B4LFU:
         LOG(INFO) << " Use Strategy::B4LFU in multi-tier EmbeddingVariable "
                 << name;
@@ -57,7 +57,7 @@ class CacheFactory {
         LOG(INFO) << " Invalid Cache strategy, \
                        use LFU in multi-tier EmbeddingVariable "
                 << name;
-        return new LFUCache<K>();
+        return new LFUCache<K>(capacity);
     }
   }
 };

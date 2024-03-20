@@ -369,16 +369,12 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
         self._constraint = constraint
         self._gather_op = None
         self._counts_tensor = {}
-        self._total_slot_num = None
         if self._is_primary:
           self._slot_num = 0 
         else:
           self._slot_num = evconfig.slot_num
-          self._total_slot_num = evconfig.slot_num + 1
         if self._is_primary:
           self._import_dependency_ops = []
-          self._slots_init_ops = []
-          self._slots_init_ops_for_restore = []
         with ops.name_scope("IsInitialized"):
           self._is_initialized_op = (
               gen_kv_variable_ops.kv_var_is_initialized_op(self._handle,
@@ -415,7 +411,6 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                     record_version = self._record_version,
                     embedding_variable_type=config_pb2.EmbeddingVariableType.IMMUTABLE,
                     name=n)
-              self._primary._slots_init_ops.append(self._init_op)
             set_attr_ops = []
 
             def is_multi_tier(storage_type):
@@ -429,12 +424,8 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
                                   config_pb2.StorageType.HBM_DRAM_SSDHASH]
               return storage_type in multi_level_list
             self._is_multi_tier = is_multi_tier(self._storage_type)
-            infer = os.environ.get("INFERENCE_MODE", "[null-inf1]")
-            print(f"===={self._is_multi_tier}={self._total_slot_num}={len(self._primary._slots_init_ops)}=infer={infer}===================")
-            # if self._is_multi_tier and self._total_slot_num is not None and len(self._primary._slots_init_ops) == self._total_slot_num:
-            if self._is_multi_tier and self._primary._slots_init_ops:
-              print("========Add kv_resource_init_cache_strategy_op=============")
-              with ops.control_dependencies(self._primary._slots_init_ops):
+            if self._is_multi_tier:
+              with ops.control_dependencies([self._init_op]):
                 self._set_cache_strategy_op = gen_kv_variable_ops.kv_resource_init_cache_strategy_op(
                   self._handle,
                   cache_strategy=self._storage_cache_strategy,
@@ -488,14 +479,9 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
               record_freq = self._record_freq,
               record_version = self._record_version,
               embedding_variable_type=config_pb2.EmbeddingVariableType.IMMUTABLE)
-          self._primary._slots_init_ops_for_restore.append(self._initializer_for_restore)
         set_attr_ops = []
-        infer = os.environ.get("INFERENCE_MODE", "[null-inf]")
-        print(f"++++{self._is_multi_tier}={self._total_slot_num}={len(self._primary._slots_init_ops)}+infer={infer}++++++++++")
-        # if self._is_multi_tier and self._total_slot_num is not None and len(self._primary._slots_init_ops_for_restore) == self._total_slot_num:
-        if self._is_multi_tier and self._primary._slots_init_ops_for_restore:
-          print("+++++++++++Add kv_resource_init_cache_strategy_op+++++++++++")
-          with ops.control_dependencies(self._primary._slots_init_ops_for_restore):
+        if self._is_multi_tier:
+          with ops.control_dependencies([self._initializer_for_restore]):
             set_cache_op = gen_kv_variable_ops.kv_resource_init_cache_strategy_op(
                 self._handle,
                 cache_strategy=self._storage_cache_strategy,
@@ -544,10 +530,15 @@ class EmbeddingVariable(resource_variable_ops.ResourceVariable):
           cache_op = op
     elif self._initializer_op.type == "InitializeKvVariableOp":
       init_op = self._initializer_op
-
-    self._init_op_for_restore = g.as_graph_element(
+    if variable_def.initialize_op_for_restore:
+      self._init_op_for_restore = g.as_graph_element(
         ops.prepend_name_scope(
             variable_def.initialize_op_for_restore,
+            import_scope=import_scope))
+    else: #Backward compatibility with 2306
+      self._init_op_for_restore = g.as_graph_element(
+        ops.prepend_name_scope(
+            variable_def.initializer_name,
             import_scope=import_scope))
     self._trainable = getattr(variable_def, "trainable", True)
     if variable_def.snapshot_name:
@@ -1134,4 +1125,3 @@ def _GatherV1Grad(op, grad):
   values = array_ops.reshape(grad, values_shape)
   indices = array_ops.reshape(indices, size)
   return [ops.IndexedSlices(values, indices, params_shape), None, None, None]
-

@@ -137,7 +137,7 @@ class HbmDramSsdStorage : public MultiTierStorage<K, V> {
 
   void InitCache(embedding::CacheStrategy cache_strategy, int num_threads) override {
     MultiTierStorage<K, V>::InitCache(cache_strategy, num_threads);
-    dram_cache_ = new LRUCache<K>();
+    dram_cache_ = new LRUCache<K>(dram_capacity_);
   }
 
   Status Remove(K key) override {

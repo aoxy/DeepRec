@@ -57,7 +57,7 @@ class EvictionManager {
 
   void AddStorage(MultiTierStorage<K,V>* storage) {
     mutex_lock l(mu_);
-    LOG(INFO) << "AddStorage ----> " << storage;
+    // LOG(INFO) << "AddStorage ----> " << storage;
     auto ret = storage_table_.emplace(std::make_pair(storage,
                            new StorageItem<K, V>(false, false)));
     if (ret.second && num_of_active_threads_ < num_of_threads_)
@@ -65,8 +65,8 @@ class EvictionManager {
   }
 
   void DeleteStorage(MultiTierStorage<K,V>* storage) {
-    mutex_lock l(mu_);
-    LOG(INFO) << "DeleteStorage ----> " << storage << "----" << storage_table_.size();
+    // mutex_lock l(mu_);
+    // LOG(INFO) << "DeleteStorage ----> " << storage << "----" << storage_table_.size();
     auto storage_item = storage_table_[storage];
     bool delete_flag = false;
     while (!delete_flag) {

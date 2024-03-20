@@ -193,8 +193,8 @@ class SSDHashKV : public KVInterface<K, V> {
     max_app_count_ = BUFFER_SIZE / val_len_;
     write_buffer_ = new char[BUFFER_SIZE];
     unsigned int max_key_count = 1 + int(BUFFER_SIZE / val_len_);
-    LOG(INFO) << "val_len_ = " << val_len_;
-    LOG(INFO) << "max_key_count = " << max_key_count;
+    // LOG(INFO) << "val_len_ = " << val_len_;
+    // LOG(INFO) << "max_key_count = " << max_key_count;
     key_buffer_ = new K[max_key_count];
     done_ = true;
   }
@@ -521,7 +521,7 @@ class SSDHashKV : public KVInterface<K, V> {
       delete posi;
       pos_out_of_date_.pop_front();
     }
-    pos_out_of_date_.push_back(old_posi);
+    pos_out_of_date_.emplace_back(old_posi);
   }
 
   bool UpdatePosition(EmbPosition** pos, EmbPosition* old_posi,
@@ -541,7 +541,7 @@ class SSDHashKV : public KVInterface<K, V> {
     AppendToWriteBuffer(curr_buffer_offset, key, value_ptr);
 
     auto iter = hash_map_.insert_lockless(std::move(
-        std::pair<K, EmbPosition*>(key, const_cast<EmbPosition*>(ep))));    
+        std::pair<K, EmbPosition*>(key, const_cast<EmbPosition*>(ep))));
     emb_files_[ep->version_]->AddCount(1);
 
     if ((*(iter.first)).second != ep) {
@@ -609,7 +609,7 @@ class SSDHashKV : public KVInterface<K, V> {
       EmbPosition* posi = it.second;
       auto iter = evict_file_map_.find(posi->version_);
       if (iter != evict_file_map_.end()) {
-        (*iter).second.push_back(std::make_pair(it.first, it.second));
+        (*iter).second.emplace_back(it);
       }
     }
   }
@@ -769,7 +769,7 @@ class SSDHashKV : public KVInterface<K, V> {
   volatile size_t evict_version_ = 0;
   volatile size_t compaction_version_ = 0;
   volatile size_t current_offset_ = 0;
-  size_t buffer_cur_ = 0;
+  volatile size_t buffer_cur_ = 0;
   size_t total_app_count_ = 0;
   size_t max_app_count_;
 

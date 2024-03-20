@@ -116,12 +116,15 @@ class EmbeddingVar : public ResourceBase {
             emb_config_.default_value_no_permission);
       }
     }
-    bool is_all_slots_initialized = 
+    is_all_slots_initialized_ = 
         feat_desc_->InitSlotInfo(
             emb_config_.emb_index, value_len_,
             std::pair<V*, int64>(
                 default_value_, emb_config_.default_value_dim));
-    if (is_all_slots_initialized) {
+    // LOG(INFO) << "Enter -----> EmbeddingVar::Init -> feat_desc_ = " << feat_desc_;
+    // LOG(INFO) << "Enter -----> EmbeddingVar::Init -> emb_index = " << emb_config_.emb_index;
+    // LOG(INFO) << "Enter -----> EmbeddingVar::Init -> all_slots_init = " << is_all_slots_initialized_;
+    if (is_all_slots_initialized_) {
       storage_->Init();
     }
 
@@ -136,6 +139,10 @@ class EmbeddingVar : public ResourceBase {
     return is_initialized_;
   }
 
+  bool IsAllSlotsInitialized() const {
+    return is_all_slots_initialized_;
+  }
+  
   Status LookupKey(K key, void** value_ptr) {
     return storage_->Get(key, value_ptr);
   }
@@ -689,6 +696,7 @@ class EmbeddingVar : public ResourceBase {
     if (cache) {
       cache->update(key_buff, key_num, version_buff, freq_buff);
       auto cache_size = CacheSize();
+      // LOG(INFO) << cache->size() << " -+++- " << cache_size;
       if (cache->size() > cache_size) {
         int64 evict_size = cache->size() - cache_size;
         K* evict_ids = new K[evict_size];
@@ -781,6 +789,7 @@ class EmbeddingVar : public ResourceBase {
 
   std::string name_;
   bool is_initialized_ = false;
+  bool is_all_slots_initialized_ = false;
 
   mutex mu_;
 

@@ -1673,7 +1673,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       storage_option = variables.StorageOption(
                         storage_type=config_pb2.StorageType.DRAM_SSDHASH,
                         storage_path=db_directory,
-                        storage_size=[1024])
+                        storage_size=[1088])
       ev_option = variables.EmbeddingVariableOption(
                                 storage_option=storage_option)
       emb_var = variable_scope.get_embedding_variable("var_1",
@@ -1753,7 +1753,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       storage_option = variables.StorageOption(
                         storage_type=config_pb2.StorageType.DRAM_SSDHASH,
                         storage_path=checkpoint_directory,
-                        storage_size=[1024])
+                        storage_size=[1088])
       ev_option = variables.EmbeddingVariableOption(
                                 storage_option=storage_option)
       emb_var = variable_scope.get_embedding_variable("var_1",
@@ -1826,7 +1826,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       storage_option = variables.StorageOption(
                         storage_type=config_pb2.StorageType.DRAM_LEVELDB,
                         storage_path = checkpoint_directory,
-                        storage_size=[1024 * 6])
+                        storage_size=[1088 * 6])
       ev_option = variables.EmbeddingVariableOption(
                                 storage_option=storage_option)
       emb_var = variable_scope.get_embedding_variable("var_1",
@@ -2078,7 +2078,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
     storage_opt = variables.StorageOption(
                           storage_type=config_pb2.StorageType.DRAM_SSDHASH,
                           storage_path=db_directory,
-                          storage_size=[512])
+                          storage_size=[544])
     ev_option = variables.EmbeddingVariableOption(storage_option=storage_opt)
     partitioner = partitioned_variables.fixed_size_partitioner(num_shards=2)
     with ops.device('/cpu:0'):
@@ -2401,7 +2401,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
       storage_opt = variables.StorageOption(
                           storage_type=config_pb2.StorageType.DRAM_SSDHASH,
                           storage_path=db_directory,
-                          storage_size=[256])
+                          storage_size=[288])
       ev_option = variables.EmbeddingVariableOption(storage_option=storage_opt)
       emb_var = variable_scope.get_embedding_variable("var",
           embedding_dim = 30,

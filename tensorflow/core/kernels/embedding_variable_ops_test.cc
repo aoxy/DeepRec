@@ -844,7 +844,7 @@ TEST(EmbeddingVariableTest, TestRemoveLockless) {
 }
 
 TEST(EmbeddingVariableTest, TestLRUCachePrefetch) {
-  BatchCache<int64>* cache = new LRUCache<int64>();
+  BatchCache<int64>* cache = new LRUCache<int64>(1);
   int num_ids = 5;
   std::vector<int64> prefetch_ids;
   int index = 0;
@@ -887,7 +887,7 @@ TEST(EmbeddingVariableTest, TestLRUCachePrefetch) {
 }
 
 TEST(EmbeddingVariableTest, TestLRUCache) {
-  BatchCache<int64>* cache = new LRUCache<int64>();
+  BatchCache<int64>* cache = new LRUCache<int64>(1);
   int num_ids = 30;
   int num_access = 100;
   int num_evict = 50;
@@ -906,7 +906,7 @@ TEST(EmbeddingVariableTest, TestLRUCache) {
 }
 
 TEST(EmbeddingVariableTest, TestLRUCacheGetCachedIds) {
-  BatchCache<int64>* cache = new LRUCache<int64>();
+  BatchCache<int64>* cache = new LRUCache<int64>(1);
   int num_ids = 30;
   int num_access = 100;
   int num_evict = 15;
@@ -934,7 +934,7 @@ TEST(EmbeddingVariableTest, TestLRUCacheGetCachedIds) {
 }
 
 TEST(EmbeddingVariableTest, TestLFUCacheGetCachedIds) {
-  BatchCache<int64>* cache = new LFUCache<int64>();
+  BatchCache<int64>* cache = new LFUCache<int64>(1);
   int num_ids = 30;
   int num_access = 100;
   int num_evict = 15;
@@ -962,7 +962,7 @@ TEST(EmbeddingVariableTest, TestLFUCacheGetCachedIds) {
 }
 
 TEST(EmbeddingVariableTest, TestLFUCachePrefetch) {
-  BatchCache<int64>* cache = new LFUCache<int64>();
+  BatchCache<int64>* cache = new LFUCache<int64>(1);
   int num_ids = 5;
   std::vector<int64> prefetch_ids;
   int index = 0;
@@ -1006,7 +1006,7 @@ TEST(EmbeddingVariableTest, TestLFUCachePrefetch) {
 
 
 TEST(EmbeddingVariableTest, TestLFUCache) {
-  BatchCache<int64>* cache = new LFUCache<int64>();
+  BatchCache<int64>* cache = new LFUCache<int64>(1);
   int num_ids = 30;
   int num_access = 100;
   int num_evict = 50;
