@@ -169,10 +169,11 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   void UpdateCache(const Tensor& indices) override {
+    cache_->update(indices);
     LOG(INFO) << "Enter -----> UpdateCache2";
-    Schedule([this, indices]() {
-      cache_->update(indices);
-    });
+    // Schedule([this, indices]() {
+    //   cache_->update(indices);
+    // });
   }
 
   virtual bool IsUseHbm() override {
