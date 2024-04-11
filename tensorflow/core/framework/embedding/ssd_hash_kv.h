@@ -32,8 +32,6 @@ limitations under the License.
 
 namespace tensorflow {
 namespace embedding {
-#pragma GCC push_options
-#pragma GCC optimize (0)
 typedef uint32 EmbPosition;
 
 static inline void SetEmbPositionVersion(EmbPosition& ep, uint32 offset) {
@@ -187,13 +185,11 @@ class SSDHashKV : public KVInterface<K, V> {
     evict_file_set_.set_counternum(16);
     evict_file_set_.set_deleted_key(DELETED_KEY);
 
-
     std::string io_scheme = "mmap_and_madvise";
     TF_CHECK_OK(ReadStringFromEnvVar(
         "TF_SSDHASH_IO_SCHEME", "mmap_and_madvise", &io_scheme));
     emb_file_creator_ =  EmbFileCreatorFactory::Create(io_scheme);
-    EmbFile* ef = emb_file_creator_->Create(path_, current_version_, BUFFER_SIZE);
-    emb_files_.emplace_back(ef);
+    CreateFile(current_version_);
 
     bool enable_compaction_ = true;
     TF_CHECK_OK(ReadBoolFromEnvVar("TF_ENABLE_SSDKV_COMPACTION", true,
@@ -219,10 +215,10 @@ class SSDHashKV : public KVInterface<K, V> {
     LOG(INFO) << "[SSDKV] val_len_ = " << val_len_;
     LOG(INFO) << "[SSDKV] max_app_count_ = " << max_app_count_;
     key_buffer_ = new K[max_app_count_];
-    done_ = true;
   }
 
   void SetSsdRecordDescriptor(SsdRecordDescriptor<K>* ssd_rec_desc) {
+    SaveBuffer();
     SSDIterator<K> ssd_iter(&hash_map_, emb_files_, val_len_, write_buffer_);
     for (ssd_iter.SeekToFirst(); ssd_iter.Valid(); ssd_iter.Next()) {
       ssd_rec_desc->key_list.emplace_back(ssd_iter.Key());
@@ -239,23 +235,10 @@ class SSDHashKV : public KVInterface<K, V> {
       ssd_rec_desc->record_count_list.emplace_back(
           file->Count());
     }
-
-    if (current_offset_ > 0) {
-      emb_files_[current_version_]->Write(write_buffer_,
-          current_offset_ * val_len_);
-      emb_files_[current_version_]->Flush();
-      ++current_version_;
-      CreateFile(current_version_);
-      TF_CHECK_OK(UpdateFlushStatus());
-    }
   }
 
   ~SSDHashKV() override {
-    if (current_offset_ > 0) {
-      emb_files_[current_version_]->Write(write_buffer_,
-            current_offset_ * val_len_);
-      TF_CHECK_OK(UpdateFlushStatus());
-    }
+    SaveBuffer();
     for (auto it : emb_files_) {
       if (!it->IsDeleted()) {
         it->DeleteFile();
@@ -267,6 +250,7 @@ class SSDHashKV : public KVInterface<K, V> {
     LOG(INFO) << "[SSDKV] current_version_ = " << current_version_;
     LOG(INFO) << "[SSDKV] max_app_count_total_ = " << current_version_ * max_app_count_;
     LOG(INFO) << "[SSDKV] total_app_count_ = " << total_app_count_;
+    LOG(INFO) << "[SSDKV] Write amplification factor = " << 1.0 * current_version_ * max_app_count_ / total_app_count_;
     LOG(INFO) << "[SSDKV] hash_map_.size_lockless() = " << hash_map_.size_lockless();
   }
 
@@ -422,25 +406,19 @@ class SSDHashKV : public KVInterface<K, V> {
       int64* file_list, int64* invalid_record_count_list,
       int64* record_count_list, int64 num_of_files,
       const std::string& old_file_prefix) {
-    //delete the file created by constructor
-    emb_files_[0]->DeleteFile();
-    delete emb_files_[0];
-    emb_files_.erase(emb_files_.begin());
     for (int64 i = 0; i < num_of_files; i++) {
       std::stringstream ss;
       ss << old_file_prefix << "/" << file_list[i] << ".emb";
       std::string old_file_path = ss.str();
-      EmbFile* f =
-          emb_file_creator_->Create(path_, current_version_, BUFFER_SIZE);
-      ++current_version_;
+      EmbFile* f = emb_files_[current_version_];
       f->LoadExistFile(old_file_path,
                        record_count_list[i],
                        invalid_record_count_list[i]);
-      // f->Reopen();
-      emb_files_.emplace_back(f);
+      f->Reopen();
+      ++current_version_;
       total_app_count_ += record_count_list[i];
+      CreateFile(current_version_);
     }
-    CreateFile(current_version_);
   }
 
   int64 Size() const override { return hash_map_.size_lockless(); }
@@ -451,13 +429,13 @@ class SSDHashKV : public KVInterface<K, V> {
 
  private:
   void WriteFile(size_t version, size_t curr_buffer_offset) {
+    emb_files_[version]->Reopen();
     emb_files_[version]->Write(write_buffer_, curr_buffer_offset);
     emb_files_[version]->Flush();
   }
 
   void CreateFile(size_t version) {
     EmbFile* f = emb_file_creator_->Create(path_, version, BUFFER_SIZE);
-    // f->Reopen();
     emb_files_.emplace_back(f);
   }
 
@@ -467,7 +445,13 @@ class SSDHashKV : public KVInterface<K, V> {
       TF_CHECK_OK(UpdateFlushStatus());
       ++current_version_;
       CreateFile(current_version_);
-      
+    }
+  }
+
+  void SaveBuffer() {
+    if (current_offset_ > 0) {
+      WriteFile(current_version_, current_offset_ * val_len_);
+      TF_CHECK_OK(UpdateFlushStatus());
     }
   }
 
@@ -601,8 +585,6 @@ class SSDHashKV : public KVInterface<K, V> {
   std::map<int64, std::vector<std::pair<K, EmbPosition>>> evict_file_map_;
 
   Thread* compaction_thread_ = nullptr;
-  volatile bool shutdown_ = false;
-  volatile bool done_ = false;
   // std::atomic_flag flag_ = ATOMIC_FLAG_INIT; unused
 
   std::function<void()> compaction_fn_;
@@ -619,7 +601,6 @@ const int SSDHashKV<K, V>::CAP_INVALID_ID = 10000000;
 template <class K, class V>
 const size_t SSDHashKV<K, V>::BUFFER_SIZE = 1 << 27;
 
-#pragma GCC pop_options
 }  // namespace embedding
 }  // namespace tensorflow
 

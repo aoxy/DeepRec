@@ -182,6 +182,8 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   Status Eviction(K* evict_ids, int64 evict_size) override {
+    mutex_lock l(*(dram_->get_mutex()));
+    mutex_lock l1(*(ssd_hash_->get_mutex()));
     void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {

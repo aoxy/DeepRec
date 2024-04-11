@@ -149,9 +149,7 @@ class MultiTierStorage : public Storage<K, V> {
       return;
     int cache_count = cache_->size();
     cache_capacity_ = cache_->get_capacity();
-    // LOG(INFO) << cache_count << " -- " << cache_capacity_;
     if (cache_count > cache_capacity_) {
-      // eviction
       int k_size = cache_count - cache_capacity_;
       k_size = std::min(k_size, EvictionSize);
       size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
@@ -206,23 +204,20 @@ class MultiTierStorage : public Storage<K, V> {
                                partition_num, value_len, is_filter,
                                false/*to_dram*/, is_incr, restore_buff);
  
-    if (emb_config.is_primary()) {
+    if (emb_config.is_primary() && cache_) {
       K* key_buff = (K*)restore_buff.key_buffer;
       V* value_buff = (V*)restore_buff.value_buffer;
       int64* version_buff = (int64*)restore_buff.version_buffer;
       int64* freq_buff = (int64*)restore_buff.freq_buffer;
-      if (cache_) {
-        cache_->update(key_buff, key_num, version_buff, freq_buff);
-        auto cache_size = CacheSize();
-        if (cache_->size() > cache_size) {
-          int64 evict_size = cache_->size() - cache_size;
-          std::vector<K> evict_ids(evict_size);
-          size_t true_size =
-              cache_->get_evic_ids(evict_ids.data(), evict_size);
-          Eviction(evict_ids.data(), true_size);
-        }
+      cache_->update(key_buff, key_num, version_buff, freq_buff);
+      auto cache_size = CacheSize();
+      if (cache_->size() > cache_size) {
+        int64 evict_size = cache_->size() - cache_size;
+        std::vector<K> evict_ids(evict_size);
+        size_t true_size =
+            cache_->get_evic_ids(evict_ids.data(), evict_size);
+        Eviction(evict_ids.data(), true_size);
       }
-      return s;
     }
     return s;
   }

@@ -30,16 +30,16 @@ namespace tensorflow {
 namespace embedding {
 class EmbFile {
  public:
-  EmbFile(const std::string& path, size_t ver, int64 buffer_size)
-    :version_(ver),
-     file_size_(buffer_size),
-     count_(0),
-     invalid_count_(0),
-     is_deleted_(false) {
+  EmbFile(const std::string& path, size_t version, int64 buffer_size)
+      : version_(version),
+        file_size_(buffer_size),
+        fd_(-1),
+        count_(0),
+        invalid_count_(0),
+        is_deleted_(true) {
     std::stringstream ss;
-    ss << std::setw(4) << std::setfill('0') << ver << ".emb";
+    ss << std::setw(4) << std::setfill('0') << version << ".emb";
     filepath_ = path + ss.str();
-    OpenFstream();
   }
 
   virtual ~EmbFile() {}
@@ -52,14 +52,17 @@ class EmbFile {
     if (fs_.is_open()) {
       fs_.close();
     }
-    close(fd_);
-    std::remove(filepath_.c_str());
+    if (fd_ > 0) {
+      close(fd_);
+    }
+    if (!is_deleted_) {
+      std::remove(filepath_.c_str());
+    }
   }
 
   void LoadExistFile(const std::string& old_file_path,
                      size_t count, size_t invalid_count) {
     Env::Default()->CopyFile(old_file_path, filepath_);
-    Reopen();
     count_ = count;
     invalid_count_ = invalid_count;
   }
@@ -89,11 +92,10 @@ class EmbFile {
       fs_.write(val, val_len);
       posix_fadvise(fd_, 0, file_size_, POSIX_FADV_DONTNEED);
     } else {
-      fs_.open(filepath_,
-          std::ios::app | std::ios::in | std::ios::out |
-          std::ios::binary);
+      OpenFstream();
       fs_.write(val, val_len);
-      fs_.close();
+      CHECK(!fs_.fail());
+      CloseFstream();
     }
   }
 
@@ -131,13 +133,10 @@ class EmbFile {
 
  protected:
   void OpenFstream() {
-    fs_.open(filepath_,
-             std::ios::app |
-             std::ios::in  |
-             std::ios::out |
-             std::ios::binary);
+    fs_.open(filepath_, std::ios::app | std::ios::out | std::ios::binary);
     LOG(INFO) << "OpenFstream --> " << filepath_ << " --> " << fs_.good();
     CHECK(fs_.good());
+    is_deleted_ = false;
   }
   void CloseFstream() {
     if (fs_.is_open()) {
@@ -145,14 +144,15 @@ class EmbFile {
     }
   }
 
- private:
+//  private:
+ public:
   size_t version_;
   size_t count_;
   size_t invalid_count_;
   char* file_addr_for_read_;
   std::fstream fs_;
 
- protected:
+//  protected:
   int64 file_size_;
   int fd_;
   bool is_deleted_;
@@ -164,18 +164,11 @@ class MmapMadviseEmbFile : public EmbFile {
   MmapMadviseEmbFile(const std::string& path,
                      size_t ver,
                      int64 buffer_size)
-    :EmbFile(path, ver, buffer_size) {
-    EmbFile::fd_ = open(EmbFile::filepath_.data(), O_RDONLY);
-    file_addr_ = (char*)mmap(nullptr, EmbFile::file_size_, PROT_READ,
-        MAP_PRIVATE, fd_, 0);
-  }
+    :EmbFile(path, ver, buffer_size) { }
 
   void Reopen() override {
-    CloseFstream();
-    munmap((void*)file_addr_, EmbFile::file_size_);
-    close(EmbFile::fd_);
     OpenFstream();
-    EmbFile::fd_ = open(EmbFile::filepath_.data(), O_RDONLY);
+    EmbFile::fd_ = open(EmbFile::filepath_.c_str(), O_RDONLY);
     file_addr_ = (char*)mmap(nullptr, EmbFile::file_size_, PROT_READ,
         MAP_PRIVATE, fd_, 0);
   }
@@ -208,15 +201,11 @@ class MmapEmbFile : public EmbFile {
   MmapEmbFile(const std::string& path,
               size_t ver,
               int64 buffer_size)
-    :EmbFile(path, ver, buffer_size) {
-    EmbFile::fd_ = open(EmbFile::filepath_.data(), O_RDONLY);
-  }
+    :EmbFile(path, ver, buffer_size) { }
 
   void Reopen() override {
-    CloseFstream();
-    close(EmbFile::fd_);
     OpenFstream();
-    EmbFile::fd_ = open(EmbFile::filepath_.data(), O_RDONLY);
+    EmbFile::fd_ = open(EmbFile::filepath_.c_str(), O_RDONLY);
   }
 
   void Read(char* val, const size_t val_len,
@@ -233,15 +222,11 @@ class DirectIoEmbFile : public EmbFile {
   DirectIoEmbFile(const std::string& path,
                   size_t ver,
                   int64 buffer_size)
-    :EmbFile(path, ver, buffer_size) {
-    EmbFile::fd_ = open(EmbFile::filepath_.data(), O_RDONLY|O_DIRECT);
-  }
+    :EmbFile(path, ver, buffer_size) { }
 
   void Reopen() override {
-    EmbFile::CloseFstream();
-    close(EmbFile::fd_);
     OpenFstream();
-    EmbFile::fd_ = open(EmbFile::filepath_.data(), O_RDONLY|O_DIRECT);
+    EmbFile::fd_ = open(EmbFile::filepath_.c_str(), O_RDONLY|O_DIRECT);
   }
 
   void Read(char* val, const size_t val_len,
