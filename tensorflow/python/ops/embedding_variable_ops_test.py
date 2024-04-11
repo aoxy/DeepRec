@@ -1706,7 +1706,7 @@ class EmbeddingVariableTest(test_util.TensorFlowTestCase):
         if name == "keys_file_id":
           self.assertAllEqual(ckpt_value, [0, 0 ,0])
         if name == "keys_offset":
-          self.assertAllEqual(ckpt_value, [0, 272 ,544])
+          self.assertAllEqual(ckpt_value, [0, 1 ,2])
         if name == "files":
           self.assertAllEqual(ckpt_value, [0])
         if name == "invalid_record_count":

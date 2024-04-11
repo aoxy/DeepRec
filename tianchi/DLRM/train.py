@@ -732,6 +732,8 @@ def set_env_for_DeepRec():
     os.environ['TF_EMBEDDING_FBJ_OPT'] = 'False'
     os.environ['TF_SSDHASH_ASYNC_COMPACTION'] = 'False'
     os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
+    os.environ['TF_SSDHASH_IO_SCHEME'] = 'mmap_and_madvise' # directio, mmap_and_madvise
+    os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
 
 
 if __name__ == '__main__':

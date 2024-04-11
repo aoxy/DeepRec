@@ -13,7 +13,7 @@ cd /home/code/aoxy/DeepRec/tianchi/DLRM/
 ```shell
 rm -rf /home/code/aoxy/DeepRec/tianchi/DLRM/result
 rm /tmp/ssd_utpy/*
-python3 train.py --data_location=/home/code/elem --smartstaged=True 2>py2-7.txt
+python3 train.py --data_location=/home/code/elem --smartstaged=True 1> dlrm_log.txt 2>&1
 python3 train.py --data_location=/home/code/elem --smartstaged=True --no_eval
 ```
 
@@ -32,11 +32,13 @@ bazel build -c opt --config=opt //tensorflow/python:embedding_variable_ops_test
 ./bazel-bin/tensorflow/python/embedding_variable_ops_test EmbeddingVariableTest.testEmbeddingVariableForDRAMAndSSD testEmbeddingVariableForMultiTierInference
 ./bazel-bin/tensorflow/python/embedding_variable_ops_test 2>py2.txt >py1.txt
 ./bazel-bin/tensorflow/python/embedding_variable_ops_test EmbeddingVariableTest.testEmbeddingVariableForDRAMAndLEVELDB > pylog.txt 2>&1
+./bazel-bin/tensorflow/python/embedding_variable_ops_test EmbeddingVariableTest.testEmbeddingVariableForDRAMAndSSDSaveCkpt > pylog.txt 2>&1
 
 bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_performance_test
 bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_ops_test
 cc --gtest_filter=EmbeddingVariableTest.TestLRUCachePrefetch
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_ops_test --gtest_filter=EmbeddingVariableTest.TestBLFUCachePrefetch
+./bazel-bin/tensorflow/core/kernels/embedding_variable_ops_test --gtest_filter=KVInterfaceTest.TestSSDKVSyncCompaction
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingvariableTest.TestBLFUCachePrefetch
 2>/home/code/aoxy/AIRResult/result3/1/cpplog2.txt >/home/code/aoxy/AIRResult/result3/1/cpplog1.txt
 
