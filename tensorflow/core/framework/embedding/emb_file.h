@@ -30,7 +30,7 @@ namespace tensorflow {
 namespace embedding {
 class EmbFile {
  public:
-  EmbFile(const std::string& path, size_t version, int64 buffer_size)
+  EmbFile(const std::string& path, size_t version, uint64 buffer_size)
       : version_(version),
         file_size_(buffer_size),
         fd_(-1),
@@ -62,7 +62,8 @@ class EmbFile {
 
   void LoadExistFile(const std::string& old_file_path,
                      size_t count, size_t invalid_count) {
-    Env::Default()->CopyFile(old_file_path, filepath_);
+    TF_CHECK_OK(Env::Default()->CopyFile(old_file_path, filepath_));
+    TF_CHECK_OK(Env::Default()->GetFileSize(filepath_, &file_size_));
     count_ = count;
     invalid_count_ = invalid_count;
   }
@@ -90,10 +91,13 @@ class EmbFile {
   void Write(const char* val, const size_t val_len) {
     if (fs_.is_open()) {
       fs_.write(val, val_len);
+      file_size_ = fs_.tellg();
+      CHECK(!fs_.fail());
       posix_fadvise(fd_, 0, file_size_, POSIX_FADV_DONTNEED);
     } else {
       OpenFstream();
       fs_.write(val, val_len);
+      file_size_ = fs_.tellg();
       CHECK(!fs_.fail());
       CloseFstream();
     }
@@ -134,26 +138,25 @@ class EmbFile {
  protected:
   void OpenFstream() {
     fs_.open(filepath_, std::ios::app | std::ios::out | std::ios::binary);
-    LOG(INFO) << "OpenFstream --> " << filepath_ << " --> " << fs_.good();
     CHECK(fs_.good());
     is_deleted_ = false;
   }
+
   void CloseFstream() {
     if (fs_.is_open()) {
       fs_.close();
     }
   }
 
-//  private:
- public:
+ private:
   size_t version_;
   size_t count_;
   size_t invalid_count_;
   char* file_addr_for_read_;
   std::fstream fs_;
 
-//  protected:
-  int64 file_size_;
+ protected:
+  uint64 file_size_;
   int fd_;
   bool is_deleted_;
   std::string filepath_;
@@ -163,7 +166,7 @@ class MmapMadviseEmbFile : public EmbFile {
  public: 
   MmapMadviseEmbFile(const std::string& path,
                      size_t ver,
-                     int64 buffer_size)
+                     uint64 buffer_size)
     :EmbFile(path, ver, buffer_size) { }
 
   void Reopen() override {
@@ -200,7 +203,7 @@ class MmapEmbFile : public EmbFile {
  public: 
   MmapEmbFile(const std::string& path,
               size_t ver,
-              int64 buffer_size)
+              uint64 buffer_size)
     :EmbFile(path, ver, buffer_size) { }
 
   void Reopen() override {
@@ -221,7 +224,7 @@ class DirectIoEmbFile : public EmbFile {
  public:
   DirectIoEmbFile(const std::string& path,
                   size_t ver,
-                  int64 buffer_size)
+                  uint64 buffer_size)
     :EmbFile(path, ver, buffer_size) { }
 
   void Reopen() override {

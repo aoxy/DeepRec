@@ -577,7 +577,7 @@ class SSDHashKV : public KVInterface<K, V> {
   static const int EMPTY_KEY;
   static const int DELETED_KEY;
   static const int CAP_INVALID_ID;
-  static const size_t BUFFER_SIZE;
+  static const uint64 BUFFER_SIZE;
 
   std::vector<EmbFile*> emb_files_;
   typedef google::dense_hash_set_lockless<K> LocklessHashSet;
@@ -599,7 +599,7 @@ const int SSDHashKV<K, V>::DELETED_KEY = -2;
 template <class K, class V>
 const int SSDHashKV<K, V>::CAP_INVALID_ID = 10000000;
 template <class K, class V>
-const size_t SSDHashKV<K, V>::BUFFER_SIZE = 1 << 27;
+const uint64 SSDHashKV<K, V>::BUFFER_SIZE = 1 << 27;
 
 }  // namespace embedding
 }  // namespace tensorflow
