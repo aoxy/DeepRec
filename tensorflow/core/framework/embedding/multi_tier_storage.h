@@ -57,16 +57,11 @@ class MultiTierStorage : public Storage<K, V> {
   TF_DISALLOW_COPY_AND_ASSIGN(MultiTierStorage);
 
   virtual void Init() override {
-    // LOG(INFO) << "Enter -----> MultiTierStorage::Init -> total_dim= " << total_dim();
-    // LOG(INFO) << "Enter -----> MultiTierStorage::Init -> data_bytes= " << data_bytes();
-    // cache_capacity_ = std::max<int64>(Storage<K, V>::storage_config_.size[0] / data_bytes(), 1 << 6);
     cache_capacity_ = Storage<K, V>::storage_config_.size[0] / data_bytes();
-    // LOG(INFO) << "Enter -----> MultiTierStorage::Init -> cache_capacity_= " << cache_capacity_;
     ready_eviction_ = true;
   }
 
-  int64 CacheSize() const override {
-    // LOG(INFO) << "Enter -----> MultiTierStorage::CacheSize -> cache_capacity_= " << cache_capacity_;
+  int64 CacheCapacity() const override {
     return cache_capacity_;
   }
 
@@ -76,9 +71,6 @@ class MultiTierStorage : public Storage<K, V> {
 
   void InitCache(embedding::CacheStrategy cache_strategy, int num_threads) override {
     if (cache_ == nullptr) {
-      // LOG(INFO) << "Enter -----> MultiTierStorage::InitCache -> total_dim = " << total_dim();
-      // LOG(INFO) << "Enter -----> MultiTierStorage::InitCache -> data_bytes = " << data_bytes();
-      // LOG(INFO) << "Enter -----> MultiTierStorage::InitCache -> cache_capacity_ = " << cache_capacity_;
       cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_, num_threads);
       eviction_manager_ = EvictionManagerCreator::Create<K, V>();
       eviction_manager_->AddStorage(this);
@@ -210,9 +202,9 @@ class MultiTierStorage : public Storage<K, V> {
       int64* version_buff = (int64*)restore_buff.version_buffer;
       int64* freq_buff = (int64*)restore_buff.freq_buffer;
       cache_->update(key_buff, key_num, version_buff, freq_buff);
-      auto cache_size = CacheSize();
-      if (cache_->size() > cache_size) {
-        int64 evict_size = cache_->size() - cache_size;
+      auto cache_capacity = CacheCapacity();
+      if (cache_->size() > cache_capacity) {
+        int64 evict_size = cache_->size() - cache_capacity;
         std::vector<K> evict_ids(evict_size);
         size_t true_size =
             cache_->get_evic_ids(evict_ids.data(), evict_size);

@@ -157,8 +157,8 @@ class SingleTierStorage : public Storage<K, V> {
     return kv_->Size();
   }
 
-  int64 CacheSize() const override {
-    LOG(FATAL) << "Unsupport cachesize in SingleTierStorage.";
+  int64 CacheCapacity() const override {
+    LOG(FATAL) << "Unsupport CacheCapacity in SingleTierStorage.";
     return 0;
   }
 

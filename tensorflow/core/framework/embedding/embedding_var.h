@@ -438,8 +438,8 @@ class EmbeddingVar : public ResourceBase {
     return storage_->Size();
   }
 
-  int64 CacheSize() const {
-    return storage_->CacheSize();
+  int64 CacheCapacity() const {
+    return storage_->CacheCapacity();
   }
 
   int64 MemoryUsage() const {
@@ -695,10 +695,9 @@ class EmbeddingVar : public ResourceBase {
     auto cache = Cache();
     if (cache) {
       cache->update(key_buff, key_num, version_buff, freq_buff);
-      auto cache_size = CacheSize();
-      // LOG(INFO) << cache->size() << " -+++- " << cache_size;
-      if (cache->size() > cache_size) {
-        int64 evict_size = cache->size() - cache_size;
+      auto cache_capacity = CacheCapacity();
+      if (cache->size() > cache_capacity) {
+        int64 evict_size = cache->size() - cache_capacity;
         K* evict_ids = new K[evict_size];
         size_t true_size = cache->get_evic_ids(evict_ids, evict_size);
         if (!IsUseHbm()) {

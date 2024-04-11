@@ -196,9 +196,9 @@ class KvResourceCollectEmbeddingOp : public OpKernel {
               "ev's value_len should same with output's dimension(1)",
               std::to_string(slice_elems), std::to_string(ev->ValueLen())));
       OP_REQUIRES(c, !ev->IsMultiLevel() ||
-          (ev->IsMultiLevel() && ev->CacheSize() >= N),
+          (ev->IsMultiLevel() && ev->CacheCapacity() >= N),
           errors::InvalidArgument(
-              "MultiLevel EV's Cache size ", ev->CacheSize(),
+              "MultiLevel EV's Cache size ", ev->CacheCapacity(),
               " should large than IDs in batch ", N));
       const size_t slice_bytes = slice_elems * sizeof(TValue);
       EmbeddingVarContext<Device> ev_ctx(c);
@@ -284,9 +284,9 @@ class KvResourceGatherOp : public OpKernel {
               "ev's value_len should same with output's dimension(1)",
               std::to_string(slice_elems), std::to_string(ev->ValueLen())));
       OP_REQUIRES(c, !ev->IsMultiLevel() ||
-          (ev->IsMultiLevel() && ev->CacheSize() >= N),
+          (ev->IsMultiLevel() && ev->CacheCapacity() >= N),
           errors::InvalidArgument(
-              "MultiLevel EV's Cache size ", ev->CacheSize(),
+              "MultiLevel EV's Cache size ", ev->CacheCapacity(),
               " should large than IDs in batch ", N));
 
       EmbeddingVarContext<CPUDevice> ev_ctx(c);
@@ -382,9 +382,9 @@ class KvResourceGatherGPUOp : public OpKernel {
               "ev's value_len should same with output's dimension(1)",
               std::to_string(slice_elems), std::to_string(ev->ValueLen())));
       OP_REQUIRES(c, !ev->IsMultiLevel() ||
-          (ev->IsMultiLevel() && ev->CacheSize() >= N),
+          (ev->IsMultiLevel() && ev->CacheCapacity() >= N),
           errors::InvalidArgument(
-              "MultiLevel EV's Cache size ", ev->CacheSize(),
+              "MultiLevel EV's Cache size ", ev->CacheCapacity(),
               " should large than IDs in batch ", N));
       const size_t slice_bytes = slice_elems * sizeof(TValue);
       EmbeddingVarContext<GPUDevice> ev_ctx(c);

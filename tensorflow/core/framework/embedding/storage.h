@@ -133,7 +133,7 @@ class Storage {
   }
 
   virtual void InitCache(embedding::CacheStrategy cache_strategy, int num_threads) = 0;
-  virtual int64 CacheSize() const = 0;
+  virtual int64 CacheCapacity() const = 0;
   virtual BatchCache<K>* Cache() = 0;
   virtual bool IsMultiLevel() = 0;
   virtual bool IsUseHbm() = 0;

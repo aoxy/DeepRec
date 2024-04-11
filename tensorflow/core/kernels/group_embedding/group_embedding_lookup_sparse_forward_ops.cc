@@ -70,9 +70,9 @@ class GroupEmbeddingVariableLookupCpuOp
       OP_REQUIRES(
           ctx,
           !embedding_var->IsMultiLevel() || (embedding_var->IsMultiLevel() &&
-                                             embedding_var->CacheSize() >= nnz),
+                                             embedding_var->CacheCapacity() >= nnz),
           errors::InvalidArgument("MultiLevel EV's Cache size ",
-                                  embedding_var->CacheSize(),
+                                  embedding_var->CacheCapacity(),
                                   " should large than IDs in batch ", nnz));
 
       // Stage 1
