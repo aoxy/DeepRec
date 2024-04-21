@@ -34,27 +34,31 @@ namespace tensorflow {
 namespace embedding {
 typedef uint32 EmbPosition;
 
-static inline void SetEmbPositionVersion(EmbPosition& ep, uint32 offset) {
+static inline EmbPosition SetEmbPositionVersion(EmbPosition& ep, uint32 offset) {
   ep &= ~static_cast<uint32>(0xfe000000);
   ep |= offset << 25;
+  return ep;
 }
 
-static inline void SetEmbPositionOffset(EmbPosition& ep, uint32 offset) {
+static inline EmbPosition SetEmbPositionOffset(EmbPosition& ep, uint32 offset) {
   ep &= ~static_cast<uint32>(0x1fffffc);
   ep |= offset << 2;
+  return ep;
 }
 
-static inline void SetEmbPositionInvalid(EmbPosition& ep, bool invalid) {
+static inline EmbPosition SetEmbPositionInvalid(EmbPosition& ep, bool invalid) {
   ep &= ~static_cast<uint32>(2);
   ep |= static_cast<uint32>(invalid) << 1;
+  return ep;
 }
 
-static inline void SetEmbPositionFlushed(EmbPosition& ep, bool flushed) {
+static inline EmbPosition SetEmbPositionFlushed(EmbPosition& ep, bool flushed) {
   if (flushed) {
     ep |= static_cast<uint32>(1);
   } else {
     ep &= ~static_cast<uint32>(1);
   }
+  return ep;
 }
 
 static inline uint32 GetEmbPositionVersion(EmbPosition& ep) {
@@ -75,6 +79,10 @@ static inline bool IsEmbPositionFlushed(EmbPosition& ep) {
   return ep & static_cast<uint32>(1);
 }
 
+static inline bool IsEmbPositionSameIgnoreStatus(EmbPosition& ep1, EmbPosition& ep2) {
+  return (ep1 >> 2) == (ep2 >> 2);
+}
+
 static inline EmbPosition CreateEmbPosition(uint32 o, uint32 v, bool f) {
   EmbPosition ep = static_cast<uint32>(f);
   SetEmbPositionOffset(ep, o);
@@ -86,10 +94,10 @@ static inline EmbPosition CreateEmbPosition() { return 0; }
 
 static inline void PrintEmbPosition(EmbPosition& ep) {
   std::cout << "EmbPosition: " << ep
-            << ", offset = " << GetEmbPositionOffset(ep)
             << ", version = " << GetEmbPositionVersion(ep)
-            << ", flushed = " << IsEmbPositionFlushed(ep)
-            << ", invalid = " << IsEmbPositionInvalid(ep) << std::endl;
+            << ", offset = " << GetEmbPositionOffset(ep)
+            << ", invalid = " << IsEmbPositionInvalid(ep)
+            << ", flushed = " << IsEmbPositionFlushed(ep) << std::endl;
 }
 
 template <class K>
@@ -184,6 +192,8 @@ class SSDHashKV : public KVInterface<K, V> {
     evict_file_set_.set_empty_key_and_value(EMPTY_KEY, -1);
     evict_file_set_.set_counternum(16);
     evict_file_set_.set_deleted_key(DELETED_KEY);
+    total_app_count_in = 0;
+    total_app_count_co = 0;
 
     std::string io_scheme = "mmap_and_madvise";
     TF_CHECK_OK(ReadStringFromEnvVar(
@@ -250,6 +260,8 @@ class SSDHashKV : public KVInterface<K, V> {
     LOG(INFO) << "[SSDKV] current_version_ = " << current_version_;
     LOG(INFO) << "[SSDKV] max_app_count_total_ = " << current_version_ * max_app_count_;
     LOG(INFO) << "[SSDKV] total_app_count_ = " << total_app_count_;
+    LOG(INFO) << "[SSDKV] total_app_count_in = " << total_app_count_in;
+    LOG(INFO) << "[SSDKV] total_app_count_co = " << total_app_count_co;
     LOG(INFO) << "[SSDKV] Write amplification factor = " << 1.0 * current_version_ * max_app_count_ / total_app_count_;
     LOG(INFO) << "[SSDKV] hash_map_.size_lockless() = " << hash_map_.size_lockless();
   }
@@ -263,16 +275,36 @@ class SSDHashKV : public KVInterface<K, V> {
     }
   }
 
-  EmbPosition UpdatePosition(K key, EmbPosition target) {
+  EmbPosition UpdatePositionEnsure(K key, EmbPosition target) {
     auto iter = hash_map_.insert_lockless(std::move(
-        std::pair<K, EmbPosition>(key,target)));
+        std::pair<K, EmbPosition>(key, target)));
     EmbPosition posi = (*(iter.first)).second;
-    if (posi != target) {
-      __sync_bool_compare_and_swap(
+    bool flag = false;
+    do {
+      flag = __sync_bool_compare_and_swap(
+              &((*(iter.first)).second),
+              (*(iter.first)).second,
+              target);
+    } while (!flag);
+    return posi;
+  }
+
+  EmbPosition UpdatePositionStatus(K key, EmbPosition posi, std::function<EmbPosition(EmbPosition&, bool)> set_status) {
+    EmbPosition target = posi;
+    set_status(target, true);
+    auto iter = hash_map_.insert_lockless(std::move(
+        std::pair<K, EmbPosition>(key, target)));
+    bool flag = __sync_bool_compare_and_swap(
+                &((*(iter.first)).second),
+                posi, target);
+    if (!flag) {
+      posi = (*(iter.first)).second;
+      if (IsEmbPositionSameIgnoreStatus(target, posi)) {
+        __sync_bool_compare_and_swap(
           &((*(iter.first)).second),
-          posi, target);
+          posi, set_status(posi, true));
+      }
     }
-    EnsureUpdate(key, target);
     return posi;
   }
 
@@ -284,8 +316,7 @@ class SSDHashKV : public KVInterface<K, V> {
             key_buffer_[i], " in SSDHashKV.");
       } else {
         EmbPosition posi = iter.second;
-        SetEmbPositionFlushed(posi, true);
-        UpdatePosition(key_buffer_[i], posi);
+        UpdatePositionStatus(key_buffer_[i], posi, SetEmbPositionFlushed);
       }
     }
     current_offset_ = 0;
@@ -307,8 +338,7 @@ class SSDHashKV : public KVInterface<K, V> {
         memcpy((char*)val, write_buffer_ + offset, val_len_);
       }
       *value_ptr = val;
-      SetEmbPositionInvalid(posi, true);
-      UpdatePosition(key, posi);
+      UpdatePositionStatus(key, posi, SetEmbPositionInvalid);
       return Status::OK();
     }
   }
@@ -466,7 +496,7 @@ class SSDHashKV : public KVInterface<K, V> {
       bool is_compaction = false) {
     EmbPosition ep = CreateEmbPosition(current_offset_, current_version_, false);
     AppendToWriteBuffer(key, value_ptr);
-    EmbPosition old_posi = UpdatePosition(key, ep);
+    EmbPosition old_posi = UpdatePositionEnsure(key, ep);
     emb_files_[current_version_]->AddCount(1);
     if (!is_compaction && old_posi != ep) {
       uint32 old_version = GetEmbPositionVersion(old_posi);
@@ -524,6 +554,9 @@ class SSDHashKV : public KVInterface<K, V> {
             GetEmbPositionOffset(posi) * val_len_);
           CheckBuffer();
           SaveKV(it_vec.first, val, true);
+          total_app_count_co++;
+        } else {
+          total_app_count_in++;
         }
       }
       file->UnmapForRead();
@@ -563,6 +596,8 @@ class SSDHashKV : public KVInterface<K, V> {
   size_t current_version_ = 0;
   size_t current_offset_ = 0;
   size_t total_app_count_ = 0;
+  size_t total_app_count_in = 0;
+  size_t total_app_count_co = 0;
   size_t max_app_count_;
 
   char* write_buffer_ = nullptr;
