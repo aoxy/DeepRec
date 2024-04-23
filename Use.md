@@ -2,6 +2,7 @@
 
 
 ```shell
+docker stop axynetp
 docker start axynetp
 docker exec -it axynetp /bin/bash
 cd /home/code/aoxy/DeepRec/
@@ -29,21 +30,29 @@ gdb ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test core
 
 ```shell
 bazel build -c opt --config=opt //tensorflow/python:embedding_variable_ops_test
+./bazel-bin/tensorflow/python/embedding_variable_ops_test
+
+bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_performance_test
+./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test
+
+bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_ops_test
+./bazel-bin/tensorflow/core/kernels/embedding_variable_ops_test
+
+bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_memory_test
+./bazel-bin/tensorflow/core/kernels/embedding_variable_memory_test
+
 ./bazel-bin/tensorflow/python/embedding_variable_ops_test EmbeddingVariableTest.testEmbeddingVariableForDRAMAndSSD testEmbeddingVariableForMultiTierInference
 ./bazel-bin/tensorflow/python/embedding_variable_ops_test 2>py2.txt >py1.txt
 ./bazel-bin/tensorflow/python/embedding_variable_ops_test EmbeddingVariableTest.testEmbeddingVariableForDRAMAndLEVELDB > pylog.txt 2>&1
 ./bazel-bin/tensorflow/python/embedding_variable_ops_test EmbeddingVariableTest.testEmbeddingVariableForDRAMAndSSDSaveCkpt > pylog.txt 2>&1
 
-bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_performance_test
-bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_ops_test
-cc --gtest_filter=EmbeddingVariableTest.TestLRUCachePrefetch
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_ops_test --gtest_filter=EmbeddingVariableTest.TestBLFUCachePrefetch
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_ops_test --gtest_filter=KVInterfaceTest.TestSSDKVSyncCompaction
-./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingvariableTest.TestBLFUCachePrefetch
-2>/home/code/aoxy/AIRResult/result3/1/cpplog2.txt >/home/code/aoxy/AIRResult/result3/1/cpplog1.txt
 
-./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestLookupOrCreateElastic 2>/home/code/aoxy/AIRResult/ElasticBLFU/1/cpplog2.txt >/home/code/aoxy/AIRResult/ElasticBLFU/1/cpplog1.txt
-./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestMultiTierLookupOrCreate 2>/home/code/aoxy/AIRResult/FixedBLFU/1/cpplog2.txt >/home/code/aoxy/AIRResult/FixedBLFU/1/cpplog1.txt
+./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingvariableTest.TestBLFUCachePrefetch
+
+./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestLookupOrCreateElastic
+./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestMultiTierLookupOrCreate
 ```
 
 ## PY代码修改
@@ -51,7 +60,6 @@ cc --gtest_filter=EmbeddingVariableTest.TestLRUCachePrefetch
 ```shell
 cp /home/code/aoxy/DeepRec/tensorflow/python/ops/kv_variable_ops.py /usr/local/lib/python3.8/dist-packages/tensorflow_core/python/ops/kv_variable_ops.py
 cp /home/code/aoxy/DeepRec/tensorflow/python/training/adam_async.py /usr/local/lib/python3.8/dist-packages/tensorflow_core/python/training/adam_async.py
-
 ```
 
 ## 配置新物理机
