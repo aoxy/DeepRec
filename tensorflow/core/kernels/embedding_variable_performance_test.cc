@@ -535,6 +535,7 @@ void TestMultiTierLookupOrCreateCache(std::string title,
 }
 
 TEST(EmbeddingVariablePerformanceTest, TestMultiTierLookupOrCreate) {
+  setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:LRU",
   //                                  CacheStrategy::LRU);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:LFU",
@@ -549,6 +550,7 @@ TEST(EmbeddingVariablePerformanceTest, TestMultiTierLookupOrCreate) {
   //                                  CacheStrategy::B32LFU);
   // TestMultiTierLookupOrCreateCache("TestMultiTierLookupOrCreate:BLFU(64)",
   //                                  CacheStrategy::B64LFU);
+  unsetenv("TF_CACHE_RECORD_HITRATE");
 }
 
 void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
@@ -617,6 +619,7 @@ void TestMultiTierLookupCache(std::string title, CacheStrategy cache_strategy) {
 }
 
 TEST(EmbeddingVariablePerformanceTest, TestMultiTierLookup) {
+  setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
   // TestMultiTierLookupCache("TestMultiTierLookup:LRU", CacheStrategy::LRU);
   // TestMultiTierLookupCache("TestMultiTierLookup:LFU", CacheStrategy::LFU);
   // TestMultiTierLookupCache("TestMultiTierLookup:BLFU(4)", CacheStrategy::B4LFU);
@@ -627,6 +630,7 @@ TEST(EmbeddingVariablePerformanceTest, TestMultiTierLookup) {
   //                          CacheStrategy::B32LFU);
   // TestMultiTierLookupCache("TestMultiTierLookup:BLFU(64)",
   //                          CacheStrategy::B64LFU);
+  unsetenv("TF_CACHE_RECORD_HITRATE");
 }
 
 double PerfLookupOrCreateElastic(const std::vector<std::vector<int64>>& input_batches,
@@ -767,10 +771,10 @@ void TestLookupOrCreateElastic(std::string title,
 
 
 TEST(EmbeddingVariablePerformanceTest, TestLookupOrCreateElastic) {
-  setenv("TF_SSDHASH_ASYNC_COMPACTION", "false", 1);
-  // setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
+  setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
   TestLookupOrCreateElastic("TestLookupOrCreateElastic:BLFU(8)",
                                    CacheStrategy::B8LFU);
+  unsetenv("TF_CACHE_RECORD_HITRATE");
 }
 
 } //namespace embedding

@@ -177,7 +177,7 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
   auto storage =
       embedding::StorageFactory::Create<int64, float>(
           embedding::StorageConfig(
-              storage_type, "axy_tmp",
+              storage_type, "/tmp/ssd_utpy/",
               storage_size,
               embedding_config,
               cache_strategy),

@@ -138,7 +138,10 @@ class EmbFile {
  protected:
   void OpenFstream() {
     fs_.open(filepath_, std::ios::app | std::ios::out | std::ios::binary);
-    CHECK(fs_.good());
+    if (!fs_.good()) {
+      LOG(FATAL) << "The directory for file " << filepath_ 
+      << " may not exist. Please create it and try again.";
+    }
     is_deleted_ = false;
   }
 

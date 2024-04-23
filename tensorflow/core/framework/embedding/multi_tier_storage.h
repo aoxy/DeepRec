@@ -58,6 +58,7 @@ class MultiTierStorage : public Storage<K, V> {
 
   virtual void Init() override {
     cache_capacity_ = Storage<K, V>::storage_config_.size[0] / data_bytes();
+    VLOG(0) << "[MultiTierStorage] cache_capacity_ = " << cache_capacity_;
     ready_eviction_ = true;
   }
 
