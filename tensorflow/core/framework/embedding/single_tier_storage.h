@@ -610,8 +610,8 @@ class SsdHashStorage : public SingleTierStorage<K, V> {
       {
         mutex_lock l(Storage<K, V>::mu_);
         ssd_kv->SetSsdRecordDescriptor(&ssd_rec_desc);
+        ssd_rec_desc.GenerateCheckpoint(prefix, tensor_name);
       }
-      ssd_rec_desc.GenerateCheckpoint(prefix, tensor_name);
     }
     return Status::OK();
   }

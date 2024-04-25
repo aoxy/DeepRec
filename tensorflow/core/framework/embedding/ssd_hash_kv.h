@@ -458,14 +458,24 @@ class SSDHashKV : public KVInterface<K, V> {
 
  private:
   void WriteFile(size_t version, size_t curr_buffer_offset) {
+    version = version & static_cast<uint32>(0b1111111);
     emb_files_[version]->Reopen();
     emb_files_[version]->Write(write_buffer_, curr_buffer_offset);
     emb_files_[version]->Flush();
   }
 
   void CreateFile(size_t version) {
-    EmbFile* f = emb_file_creator_->Create(path_, version, BUFFER_SIZE);
-    emb_files_.emplace_back(f);
+    version = version & static_cast<uint32>(0b1111111);
+    if (version < emb_files_.size()) {
+      if (!emb_files_[version]->IsDeleted()) {
+        LOG(FATAL) << "Uncompacted file will be overwritten. version = " << version;
+      }
+      delete emb_files_[version];
+      emb_files_[version] = emb_file_creator_->Create(path_, version, BUFFER_SIZE);
+    } else {
+      EmbFile* f = emb_file_creator_->Create(path_, version, BUFFER_SIZE);
+      emb_files_.emplace_back(f);
+    }
   }
 
   void CheckBuffer() {
@@ -481,6 +491,8 @@ class SSDHashKV : public KVInterface<K, V> {
     if (current_offset_ > 0) {
       WriteFile(current_version_, current_offset_ * val_len_);
       TF_CHECK_OK(UpdateFlushStatus());
+      ++current_version_;
+      CreateFile(current_version_);
     }
   }
 
@@ -493,14 +505,15 @@ class SSDHashKV : public KVInterface<K, V> {
 
   void SaveKV(K key, const void* value_ptr,
       bool is_compaction = false) {
-    EmbPosition ep = CreateEmbPosition(current_offset_, current_version_, false);
+    uint32 temp_current_version_ = current_version_ & static_cast<uint32>(0b1111111);
+    EmbPosition ep = CreateEmbPosition(current_offset_, temp_current_version_, false);
     AppendToWriteBuffer(key, value_ptr);
     EmbPosition old_posi = UpdatePositionEnsure(key, ep);
-    emb_files_[current_version_]->AddCount(1);
+    emb_files_[temp_current_version_]->AddCount(1);
     if (!is_compaction && old_posi != ep) {
       uint32 old_version = GetEmbPositionVersion(old_posi);
       emb_files_[old_version]->AddInvalidCount(1);
-      if (old_version != current_version_ &&
+      if (old_version != temp_current_version_ &&
           !emb_files_[old_version]->IsDeleted() &&
           emb_files_[old_version]->IsNeedToBeCompacted()) {
         evict_file_set_.insert_lockless(old_version);

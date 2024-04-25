@@ -95,10 +95,7 @@ class SsdRecordDescriptor {
       std::stringstream new_ss;
       new_ss << file_id << ".emb";
       std::string new_file_path = embedding_folder_path + new_ss.str();
-      Status s = Env::Default()->CopyFile(file_path, new_file_path);
-      if (!s.ok()) {
-        LOG(FATAL)<<"Copy file "<<file_path<<" failed!";
-      }
+      TF_CHECK_OK(Env::Default()->CopyFile(file_path, new_file_path));
     }
   }
 };
