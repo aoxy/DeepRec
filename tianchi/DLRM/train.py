@@ -343,22 +343,10 @@ def build_feature_columns():
         shared_emb_cols = tf.feature_column.shared_embedding_columns(
             cate_cols, EMBEDDING_DIMENSIONS)
         sparse_column.extend(shared_emb_cols)
-    # [1024 * 1024 * 500]
-    # Training completed.
-    # TimeCost = 211.61400655005127 sec
-    # /tmp/ssd_utpy/ssd_kv_1694879035247586_0049.emb --> 1
-    # sync_idx_count = 257
-    # HitRate = 93.3628693 %, visit_count = 8783227, hit_count = 8391594
 
-    # [1024 * 1024 * 300]
-    # Training completed.
-    # TimeCost = 256.4814247591421 sec
-    # /tmp/ssd_utpy/ssd_kv_1694879349958633_0108.emb --> 1
-    # sync_idx_count = 257
-    # HitRate = 88.1704865 %, visit_count = 7147653, hit_count = 6447856
     storage_option = tf.StorageOption(storage_type=config_pb2.StorageType.DRAM_SSDHASH,
                                   storage_path="/tmp/ssd_utpy",
-                                  storage_size=[1024 * 1024 * 500],
+                                  storage_size=[1024 * 1024 * args.cache_cap * 100],
                                   cache_strategy = config_pb2.CacheStrategy.B8LFU)
                                   
     ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
@@ -367,7 +355,8 @@ def build_feature_columns():
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
 
-        if column == "timediff_list":
+        if column == "timediff_list" and args.cache_cap > 0:
+            tf.logging.info('Use StorageType.DRAM_SSDHASH, Cache Capacity {}MB'.format(args.cache_cap * 100))
             cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
 
         if args.tf or not args.emb_fusion:
@@ -650,6 +639,10 @@ def get_arg_parser():
                         help='Whether to enable Auto graph fusion feature.',
                         type=boolean_string,
                         default=True)
+    parser.add_argument('--cache_cap',
+                        help='Cache Capacity(x100MB).',
+                        type=int,
+                        default=5)
     return parser
 
 
