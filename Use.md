@@ -14,7 +14,7 @@ cd /home/code/aoxy/DeepRec/tianchi/DLRM/
 ```shell
 rm -rf /home/code/aoxy/DeepRec/tianchi/DLRM/result
 rm /tmp/ssd_utpy/*
-python3 train.py --data_location=/home/code/elem --smartstaged=True 1> dlrm_log.txt 2>&1
+python3 train_s.py --data_location=/home/code/elem --smartstaged=True --cache_cap 5 1> dlrm_log.txt 2>&1
 python3 train.py --data_location=/home/code/elem --smartstaged=True --no_eval
 ```
 
