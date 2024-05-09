@@ -81,7 +81,7 @@ TYPE_COLS = ['time_type', 'time_type_list']
 TYPE_LIST = ['lunch', 'night', 'dinner', 'tea', 'breakfast']
 
 HASH_BUCKET_SIZES = 100000
-EMBEDDING_DIMENSIONS = 16
+EMBEDDING_DIMENSIONS = 16 * 4
 
 
 class DLRM():
