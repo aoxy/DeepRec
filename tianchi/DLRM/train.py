@@ -344,13 +344,13 @@ def build_feature_columns():
             cate_cols, EMBEDDING_DIMENSIONS)
         sparse_column.extend(shared_emb_cols)
 
-    storage_type1 = config_pb2.StorageType.DRAM
-    storage_type1_str = 'StorageType.DRAM'
+    storage_type_inst = config_pb2.StorageType.DRAM
+    storage_type_str = 'StorageType.DRAM'
     if args.cache_cap > 0:
-        storage_type=config_pb2.StorageType.DRAM_SSDHASH
-        storage_type1_str = 'StorageType.DRAM_SSDHASH'
+        storage_type_inst = config_pb2.StorageType.DRAM_SSDHASH
+        storage_type_str = 'StorageType.DRAM_SSDHASH'
     cache_cap_mb = args.cache_cap * 100 * (EMBEDDING_DIMENSIONS // 16)
-    storage_option = tf.StorageOption(storage_type=storage_type1,
+    storage_option = tf.StorageOption(storage_type=storage_type_inst,
                                   storage_path="/tmp/ssd_utpy",
                                   storage_size=[1024 * 1024 * cache_cap_mb],
                                   cache_strategy = config_pb2.CacheStrategy.B8LFU)
@@ -362,7 +362,7 @@ def build_feature_columns():
             column, HASH_BUCKET_SIZES)
 
         if column == "timediff_list" and args.cache_cap >= 0:
-            tf.logging.info('Use {}, Cache Capacity {}MB'.format(storage_type1_str , cache_cap_mb))
+            tf.logging.info('Use {}, Cache Capacity {}MB'.format(storage_type_str , cache_cap_mb))
             cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
 
         if args.tf or not args.emb_fusion:
