@@ -353,7 +353,7 @@ def build_feature_columns():
     storage_option = tf.StorageOption(storage_type=storage_type_inst,
                                   storage_path="/tmp/ssd_utpy",
                                   storage_size=[1024 * 1024 * cache_cap_mb],
-                                  cache_strategy = config_pb2.CacheStrategy.B8LFU)
+                                  cache_strategy = config_pb2.CacheStrategy.B8LRU)
                                   
     ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
 
@@ -523,6 +523,10 @@ def main(tf_config=None, server=None):
 
     # Session config
     sess_config = tf.ConfigProto()
+
+    # https://zhuanlan.zhihu.com/p/33086252
+    print("intra_op_parallelism_threads =", sess_config.intra_op_parallelism_threads)
+    print("inter_op_parallelism_threads =", sess_config.inter_op_parallelism_threads)
 
     # Session hooks
     hooks = []
@@ -733,7 +737,7 @@ def set_env_for_DeepRec():
     os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
     os.environ['TF_SSDHASH_IO_SCHEME'] = 'mmap_and_madvise' # directio, mmap_and_madvise
     os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
-    os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
+    # os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
 
 
 if __name__ == '__main__':

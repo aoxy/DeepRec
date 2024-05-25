@@ -36,6 +36,7 @@
 
 #include <time.h>
 #include <sys/resource.h>
+#include <unordered_set>
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/framework/embedding/cache.h"
 #include "tensorflow/core/kernels/kv_variable_ops.h"
@@ -1449,6 +1450,56 @@ TEST(EmbeddingVariableTest, TestInsertAndGetSnapshot) {
       ASSERT_EQ(value_ptr_list[i][j], i + j);
     }
   }
+}
+
+TEST(EmbeddingVariableTest, TestBLRUCache) {
+  BatchCache<int64>* cache = new BlockLockLRUCache<int64>(8, 4, 1);
+  int64 ids[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2};
+  int64 evict_ids[3] = {0};
+  cache->update(ids, 12);
+  ASSERT_EQ(cache->size(), 10);
+  int64 evic_size = cache->get_evic_ids(evict_ids, 3);
+  ASSERT_EQ(evic_size, 2);
+  ASSERT_EQ(evict_ids[0], 9);
+  ASSERT_EQ(evict_ids[1], 10);
+  ASSERT_EQ(cache->size(), 8);
+  evic_size = cache->get_evic_ids(evict_ids, 3);
+  ASSERT_EQ(evic_size, 0);
+}
+
+TEST(EmbeddingVariableTest, TestBLRUCacheLarge) {
+  // const size_t capacity = 2674938;
+  const size_t capacity = 267493;
+  const size_t batch_size = 1234;
+  const size_t EvictionSize = 10000;
+  const size_t MOD = capacity * 3;
+  size_t batchs = 10 * capacity / batch_size;
+  BatchCache<int64>* cache = new BlockLockLRUCache<int64>(capacity, 8, 1);
+  std::unordered_set<int64> ss;
+  srand((unsigned)time(NULL));
+  int64* ids = new int64[batch_size];
+  int64* evict_ids = new int64[EvictionSize];
+  for (size_t b = 0; b < batchs; b++) {
+    for (size_t i = 0; i < batch_size; i++) {
+      ids[i] = rand() % MOD;
+      ss.insert(ids[i]);
+    }
+    cache->update(ids, batch_size);
+    size_t cache_count = cache->size();
+    if (cache_count > capacity) {
+      size_t k_size = cache_count - capacity;
+      k_size = std::min(k_size, EvictionSize);
+      size_t true_size = cache->get_evic_ids(evict_ids, k_size);
+      for (size_t t = 0; t < true_size; t++) {
+        ss.erase(evict_ids[t]);
+      }
+    }
+    ASSERT_EQ(ss.size(), cache->size());
+    // if (b % 100 == 0 || b == batchs - 1)
+    //   LOG(INFO) << b * 10000 / batchs << "%% - Set: " << ss.size() << ", Cache: " << cache->size();
+  }
+  delete[] ids;
+  delete[] evict_ids;
 }
 
 } // namespace

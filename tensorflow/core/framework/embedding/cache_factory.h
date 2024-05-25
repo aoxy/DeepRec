@@ -15,7 +15,9 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_CACHE_FACTORY_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_CACHE_FACTORY_H_
 
-#include "cache.h"
+#include "tensorflow/core/framework/embedding/cache.h"
+#include "tensorflow/core/framework/embedding/block_lock_lru_cache.h"
+#include "tensorflow/core/framework/embedding/block_lock_lfu_cache.h"
 #include "tensorflow/core/framework/embedding/config.pb.h"
 
 namespace tensorflow {
@@ -29,6 +31,26 @@ class CacheFactory {
         LOG(INFO) << " Use Strategy::LRU in multi-tier EmbeddingVariable "
                 << name;
         return new LRUCache<K>(capacity);
+      case CacheStrategy::B4LRU:
+        LOG(INFO) << " Use Strategy::B4LRU in multi-tier EmbeddingVariable "
+                << name;
+        return new BlockLockLRUCache<K>(capacity, 4, num_threads);
+      case CacheStrategy::B8LRU:
+        LOG(INFO) << " Use Strategy::B8LRU in multi-tier EmbeddingVariable "
+                << name;
+        return new BlockLockLRUCache<K>(capacity, 8, num_threads);
+      case CacheStrategy::B16LRU:
+        LOG(INFO) << " Use Strategy::B16LRU in multi-tier EmbeddingVariable "
+                << name;
+        return new BlockLockLRUCache<K>(capacity, 16, num_threads);
+      case CacheStrategy::B32LRU:
+        LOG(INFO) << " Use Strategy::B32LRU in multi-tier EmbeddingVariable "
+                << name;
+        return new BlockLockLRUCache<K>(capacity, 32, num_threads);
+      case CacheStrategy::B64LRU:
+        LOG(INFO) << " Use Strategy::B64LRU in multi-tier EmbeddingVariable "
+                << name;
+        return new BlockLockLRUCache<K>(capacity, 64, num_threads);
       case CacheStrategy::LFU:
         LOG(INFO) << " Use Strategy::LFU in multi-tier EmbeddingVariable "
                 << name;
