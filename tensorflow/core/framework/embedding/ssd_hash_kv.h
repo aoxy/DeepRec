@@ -197,7 +197,7 @@ class SSDHashKV : public KVInterface<K, V> {
     TF_CHECK_OK(ReadStringFromEnvVar(
         "TF_SSDHASH_IO_SCHEME", "mmap_and_madvise", &io_scheme));
     emb_file_creator_ =  EmbFileCreatorFactory::Create(io_scheme);
-    CreateFile(current_version_);
+    CreateFile(false);
 
     bool enable_compaction_ = true;
     TF_CHECK_OK(ReadBoolFromEnvVar("TF_ENABLE_SSDKV_COMPACTION", true,
@@ -444,9 +444,8 @@ class SSDHashKV : public KVInterface<K, V> {
                        record_count_list[i],
                        invalid_record_count_list[i]);
       f->Reopen();
-      ++current_version_;
       active_emb_count_ += record_count_list[i];
-      CreateFile(current_version_);
+      CreateFile();
     }
   }
 
@@ -464,14 +463,20 @@ class SSDHashKV : public KVInterface<K, V> {
     emb_files_[version]->Flush();
   }
 
-  void CreateFile(size_t version) {
-    version = version & static_cast<uint32>(0b1111111);
+  void CreateFile(bool need_increase = true) {
+    if (need_increase) {
+      ++current_version_;
+    }
+    uint32 version = current_version_ & static_cast<uint32>(0b1111111);
     if (version < emb_files_.size()) {
-      if (!emb_files_[version]->IsDeleted()) {
-        LOG(FATAL) << "Uncompacted file will be overwritten. version = " << version;
+      while (!emb_files_[version]->IsDeleted()) {
+        VLOG(0) << "Embedding file still exists. version = " << version;
+        ++current_version_;
+        version = current_version_ & static_cast<uint32>(0b1111111);
       }
       delete emb_files_[version];
-      emb_files_[version] = emb_file_creator_->Create(path_, version, BUFFER_SIZE);
+      emb_files_[version] =
+          emb_file_creator_->Create(path_, version, BUFFER_SIZE);
     } else {
       EmbFile* f = emb_file_creator_->Create(path_, version, BUFFER_SIZE);
       emb_files_.emplace_back(f);
@@ -482,8 +487,7 @@ class SSDHashKV : public KVInterface<K, V> {
     if (current_offset_ >= file_capacity_) {
       WriteFile(current_version_, current_offset_ * val_len_);
       TF_CHECK_OK(UpdateFlushStatus());
-      ++current_version_;
-      CreateFile(current_version_);
+      CreateFile();
     }
   }
 
@@ -491,8 +495,7 @@ class SSDHashKV : public KVInterface<K, V> {
     if (current_offset_ > 0) {
       WriteFile(current_version_, current_offset_ * val_len_);
       TF_CHECK_OK(UpdateFlushStatus());
-      ++current_version_;
-      CreateFile(current_version_);
+      CreateFile();
     }
   }
 
