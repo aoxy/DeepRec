@@ -36,6 +36,7 @@ class LocklessHashMap : public KVInterface<K, V> {
   }
 
   ~LocklessHashMap() override {
+    VLOG(0) << "LocklessHashMap Size = " << Size();
     pthread_key_delete(key_);
   }
 

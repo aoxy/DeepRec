@@ -1454,14 +1454,50 @@ TEST(EmbeddingVariableTest, TestInsertAndGetSnapshot) {
 
 TEST(EmbeddingVariableTest, TestBLRUCache) {
   BatchCache<int64>* cache = new BlockLockLRUCache<int64>(8, 4, 1);
-  int64 ids[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2};
+  int64 ids[3] = {9, 1, 2};
   int64 evict_ids[3] = {0};
-  cache->update(ids, 12);
-  ASSERT_EQ(cache->size(), 10);
+  for (int64 id = 1; id <= 8; id++) {
+    cache->update(&id, 1);
+    ASSERT_EQ(cache->size(), id);
+  }
+  // Cache: 0: 2, 4, 6, 8
+  //        1: 1, 3, 5, 7
   int64 evic_size = cache->get_evic_ids(evict_ids, 3);
+  ASSERT_EQ(evic_size, 0);
+  cache->update(ids, 1);  // Evic 1, Add 9
+  // Cache: 0: 2, 4, 6, 8
+  //        1: 9, 3, 5, 7
+  // Evicted: 1
+  ASSERT_EQ(cache->size(), 9);
+  cache->update(ids + 1, 1);  // Evic 3, Add 1
+  // Cache: 0: 2, 4, 6, 8
+  //        1: 9, 1, 5, 7
+  // Evicted: 3
+  ASSERT_EQ(cache->size(), 9);
+  evic_size = cache->get_evic_ids(evict_ids, 3);
+  // Cache: 0: 2, 4, 6, 8
+  //        1: 9, 1, 5, 7
+  ASSERT_EQ(evic_size, 1);
+  ASSERT_EQ(evict_ids[0], 3);
+  ids[0] = 3;
+  ids[1] = 2;
+  ids[2] = 10;
+  cache->update(ids, 2);  // Evic 5, Add 3, 2(Update)
+  // Cache: 0: 2, 4, 6, 8
+  //        1: 9, 1, 3, 7
+  // Evicted: 5
+  ASSERT_EQ(cache->size(), 9);
+  cache->update(ids + 2, 1);  // Evic 4, Add 10
+  // Cache: 0: 2, 10, 6, 8
+  //        1: 9, 1, 3, 7
+  // Evicted: 5, 4
+  ASSERT_EQ(cache->size(), 10);
+  evic_size = cache->get_evic_ids(evict_ids, 3);
+  // Cache: 0: 2, 10, 6, 8
+  //        1: 9, 1, 3, 7
   ASSERT_EQ(evic_size, 2);
-  ASSERT_EQ(evict_ids[0], 9);
-  ASSERT_EQ(evict_ids[1], 10);
+  ASSERT_EQ(evict_ids[0], 4);
+  ASSERT_EQ(evict_ids[1], 5);
   ASSERT_EQ(cache->size(), 8);
   evic_size = cache->get_evic_ids(evict_ids, 3);
   ASSERT_EQ(evic_size, 0);
@@ -1473,7 +1509,7 @@ TEST(EmbeddingVariableTest, TestBLRUCacheLarge) {
   const size_t batch_size = 1234;
   const size_t EvictionSize = 10000;
   const size_t MOD = capacity * 3;
-  size_t batchs = 10 * capacity / batch_size;
+  size_t batchs = capacity / batch_size;
   BatchCache<int64>* cache = new BlockLockLRUCache<int64>(capacity, 8, 1);
   std::unordered_set<int64> ss;
   srand((unsigned)time(NULL));
