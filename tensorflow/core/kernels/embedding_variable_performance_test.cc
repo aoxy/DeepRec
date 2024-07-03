@@ -780,9 +780,8 @@ TEST(EmbeddingVariablePerformanceTest, TestLookupOrCreateElastic) {
   unsetenv("TF_CACHE_RECORD_HITRATE");
 }
 
-typedef google::dense_hash_map_lockless<int64, size_t> LocklessHashMap;
 
-void update_cache(BatchCache<int64>* cache, LocklessHashMap* hmap,
+void update_cache(BatchCache<int64>* cache, google::dense_hash_map_lockless<int64, size_t>* hmap,
                   const int64* input_batch, int64* evict_ids, int start,
                   int end, bool do_evic = true) {
   const size_t EvictionSize = 10000;
@@ -792,7 +791,10 @@ void update_cache(BatchCache<int64>* cache, LocklessHashMap* hmap,
       k_size = std::min(k_size, EvictionSize);
       size_t size1 = hmap->size_lockless();
       size_t csize1 = cache->size();
-      size_t true_size = cache->get_evic_ids2(evict_ids, k_size, hmap);
+      size_t true_size = cache->get_evic_ids(evict_ids, k_size);
+      for (size_t t = 0; t < true_size; t++) {
+        hmap->erase_lockless(evict_ids[t]);
+      }
       size_t size2 = hmap->size_lockless();
       size_t csize2 = cache->size();
       LOG(INFO) << std::this_thread::get_id() << " :: Map dsize = " << size1 - size2 << ", Cache dsize = " << csize1 - csize2;
@@ -807,7 +809,7 @@ double PerfCacheUpdateAndEviction(
     CacheStrategy cache_strategy, int64 capacity, int num_thread) {
   BatchCache<int64>* cache = CacheFactory::Create<int64>(
       cache_strategy, "cccache", capacity, num_thread);
-  LocklessHashMap hmap;
+  google::dense_hash_map_lockless<int64, size_t> hmap;
   hmap.max_load_factor(0.8);
   hmap.set_empty_key_and_value(-1, 0);
   hmap.set_counternum(16);
