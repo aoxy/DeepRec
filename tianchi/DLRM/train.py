@@ -551,11 +551,16 @@ def main(tf_config=None, server=None):
                  inputs=next_element)
 
     # Run model training and evaluation
+    start_time = time.perf_counter()
     train(sess_config, hooks, model, train_init_op, train_steps,
           checkpoint_dir, tf_config, server)
+    end_time = time.perf_counter()
+    print("Train TimeCost =", end_time - start_time, "sec")
     if not (args.no_eval or tf_config):
         eval(sess_config, hooks, model, test_init_op, test_steps,
              checkpoint_dir)
+        eval_time = time.perf_counter()
+        print("Eval TimeCost =", eval_time - end_time, "sec")
     os.makedirs(result_dir, exist_ok=True)
     with open(result_path, 'w') as f:
         f.write(str(global_time_cost)+'\n')
@@ -741,7 +746,6 @@ def set_env_for_DeepRec():
 
 
 if __name__ == '__main__':
-    start_time = time.perf_counter()
     parser = get_arg_parser()
     args = parser.parse_args()
     print("args.tf =", args.tf)
@@ -755,5 +759,4 @@ if __name__ == '__main__':
     else:
         tf_config, server, tf_device = generate_cluster_info(TF_CONFIG)
         main(tf_config, server)
-    end_time = time.perf_counter()
-    print("TimeCost =", end_time - start_time, "sec")
+    

@@ -34,9 +34,12 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
         MultiTierStorage<K, V>(sc, name) {
     dram_= new DramStorage<K, V>(sc, feat_desc);
     ssd_hash_ = new SsdHashStorage<K, V>(sc, feat_desc);
+    max_dram_size_ = 0;
   }
 
   ~DramSsdHashStorage() override {
+    LOG(INFO) << "DRAM Max Size = " << max_dram_size_;
+    LOG(INFO) << "DRAM Size = " << dram_->Size();
     MultiTierStorage<K, V>::DeleteFromEvictionManager();
     delete dram_;
     delete ssd_hash_;
@@ -45,8 +48,6 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   TF_DISALLOW_COPY_AND_ASSIGN(DramSsdHashStorage);
 
   Status Get(K key, void** value_ptr) override {
-    // this->cache_->update(&key, 1);
-    MultiTierStorage<K, V>::BatchEviction();
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
       return s;
@@ -65,26 +66,21 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   void Insert(K key, void** value_ptr) override {
-    MultiTierStorage<K, V>::BatchEviction();
     dram_->Insert(key, value_ptr);
   }
 
   void CreateAndInsert(K key, void** value_ptr,
       bool to_dram = false) override {
-    MultiTierStorage<K, V>::BatchEviction();
     dram_->CreateAndInsert(key, value_ptr);
   }
 
   void Import(K key, V* value,
               int64 freq, int64 version,
               int emb_index) override {
-    MultiTierStorage<K, V>::BatchEviction();
     dram_->Import(key, value, freq, version, emb_index);
   }
 
   Status GetOrCreate(K key, void** value_ptr) override {
-    // this->cache_->update(&key, 1);
-    MultiTierStorage<K, V>::BatchEviction();
     Status s = dram_->Get(key, value_ptr);
     if (s.ok()) {
       return s;
@@ -187,8 +183,10 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   Status Eviction(K* evict_ids, int64 evict_size) override {
-    VLOG(0) << "Evict " << evict_size << " IDs from DRAM(" << dram_->Size()
-              << ") to SSD(" << ssd_hash_->Size() << ").";
+    if (evict_size <= 0) {
+      return Status::OK();
+    }
+    max_dram_size_ = std::max(max_dram_size_, (size_t)dram_->Size());
     mutex_lock l(*(dram_->get_mutex()));
     mutex_lock l1(*(ssd_hash_->get_mutex()));
     void* value_ptr = nullptr;
@@ -203,8 +201,10 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   }
 
   Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) override {
-    VLOG(0) << "Evict " << evict_size << " IDs from DRAM(" << dram_->Size()
-              << ") to SSD(" << ssd_hash_->Size() << ").";
+    if (evict_size <= 0) {
+      return Status::OK();
+    }
+    max_dram_size_ = std::max(max_dram_size_, (size_t)dram_->Size());
     mutex_lock l(*(dram_->get_mutex()));
     mutex_lock l1(*(ssd_hash_->get_mutex()));
     MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->feature_descriptor());
@@ -242,6 +242,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
   DramStorage<K, V>* dram_ = nullptr;
   SsdHashStorage<K, V>* ssd_hash_ = nullptr;
   FeatureDescriptor<V>* dram_feat_desc_;
+  size_t max_dram_size_;
 };
 } // embedding
 } // tensorflow

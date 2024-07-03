@@ -780,21 +780,22 @@ TEST(EmbeddingVariablePerformanceTest, TestLookupOrCreateElastic) {
   unsetenv("TF_CACHE_RECORD_HITRATE");
 }
 
-typedef google::dense_hash_set_lockless<int64> LocklessHashSet;
-typedef google::dense_hash_map_lockless<int64, size_t> LocklessHashMap2;
+typedef google::dense_hash_map_lockless<int64, size_t> LocklessHashMap;
 
-void update_cache(BatchCache<int64>* cache, LocklessHashMap2* hmap,
+void update_cache(BatchCache<int64>* cache, LocklessHashMap* hmap,
                   const int64* input_batch, int64* evict_ids, int start,
                   int end, bool do_evic = true) {
-  const size_t EvictionSize = 1000;
+  const size_t EvictionSize = 10000;
   for (int i = start; i < end; i++) {
-    if (do_evic && cache->size() > 100 + cache->get_capacity()) {
+    if (do_evic && cache->size() > 5000 + cache->get_capacity()) {
       size_t k_size = cache->size() - cache->get_capacity();
       k_size = std::min(k_size, EvictionSize);
-      size_t true_size = cache->get_evic_ids(evict_ids, k_size);
-      for (size_t t = 0; t < true_size; t++) {
-        hmap->erase_lockless(evict_ids[t]);
-      }
+      size_t size1 = hmap->size_lockless();
+      size_t csize1 = cache->size();
+      size_t true_size = cache->get_evic_ids2(evict_ids, k_size, hmap);
+      size_t size2 = hmap->size_lockless();
+      size_t csize2 = cache->size();
+      LOG(INFO) << std::this_thread::get_id() << " :: Map dsize = " << size1 - size2 << ", Cache dsize = " << csize1 - csize2;
     }
     cache->update(&input_batch[i], 1);
     hmap->insert_lockless({input_batch[i], EvictionSize});
@@ -806,7 +807,7 @@ double PerfCacheUpdateAndEviction(
     CacheStrategy cache_strategy, int64 capacity, int num_thread) {
   BatchCache<int64>* cache = CacheFactory::Create<int64>(
       cache_strategy, "cccache", capacity, num_thread);
-  LocklessHashMap2 hmap;
+  LocklessHashMap hmap;
   hmap.max_load_factor(0.8);
   hmap.set_empty_key_and_value(-1, 0);
   hmap.set_counternum(16);
@@ -814,7 +815,7 @@ double PerfCacheUpdateAndEviction(
   std::vector<std::thread> worker_threads(num_thread);
   std::vector<std::vector<int64>> evict_ids(num_thread);
   for (int i = 0; i < num_thread; i++) {
-    evict_ids[i].resize(1000);
+    evict_ids[i].resize(10000);
   }
   double total_time = 0.0;
   timespec start, end;
@@ -830,6 +831,9 @@ double PerfCacheUpdateAndEviction(
     }
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (int i = 0; i < num_thread; i++) {
+      if (k == 0)
+        LOG(INFO) << "Thread:" << i << "[" << thread_task_range[i].first << ", "
+                  << thread_task_range[i].second << "]";
       worker_threads[i] =
           std::thread(update_cache, cache, &hmap, input_batches[k].data(),
                       evict_ids[i].data(), thread_task_range[i].first,
@@ -842,6 +846,8 @@ double PerfCacheUpdateAndEviction(
     if (k > 10)
       total_time += ((double)(end.tv_sec - start.tv_sec) * 1000000000 +
                      end.tv_nsec - start.tv_nsec);
+    LOG(INFO) << k << "]Cache: " << cache->size()
+              << ", Map: " << hmap.size_lockless();
   }
   if (cache->size() > cache->get_capacity()) {
     size_t k_size = cache->size() - cache->get_capacity();
@@ -854,12 +860,14 @@ double PerfCacheUpdateAndEviction(
   }
   
   
+  LOG(INFO) << "Evicted Cache: " << cache->size()
+              << ", Map: " << hmap.size_lockless();
   delete cache;
   return total_time;
 }
 
 void TestCacheUpdateAndEviction(std::string title, CacheStrategy cache_strategy) {
-  int num_of_batch = 100;
+  int num_of_batch = 20;
   int batch_size = 1024 * 128;
   int num_of_ids = 5000000;
   std::vector<std::vector<int64>> input_batches(num_of_batch);
@@ -880,7 +888,7 @@ void TestCacheUpdateAndEviction(std::string title, CacheStrategy cache_strategy)
   LOG(INFO) << title << " Cache capacity = " << capacity;
 
   LOG(INFO) << title << " Finish generating skew input";
-  std::vector<int> num_thread_vec({1, 3, 7});
+  std::vector<int> num_thread_vec({1, 7});
   for (auto num_thread : num_thread_vec) {
     LOG(INFO) << title << " With " << num_thread << " threads.";
     double exec_time = PerfCacheUpdateAndEviction(

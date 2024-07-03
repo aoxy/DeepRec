@@ -14,6 +14,10 @@ cd /home/code/aoxy/DeepRec/tianchi/DLRM/
 ```shell
 rm -rf /home/code/aoxy/DeepRec/tianchi/DLRM/result
 rm /tmp/ssd_utpy/*
+rep=0702v1
+mkdir -p metrics_$rep/dlrm_log_files/
+cache_cap=5
+python3 train_s.py --data_location=/home/code/elem --smartstaged=True --cache_cap=$cache_cap 1> metrics_$rep/dlrm_log_files/dlrm_log_$cache_cap.txt 2>&1
 python3 train.py --data_location=/home/code/elem --smartstaged=True --cache_cap=5 1> dlrm_log.txt 2>&1
 python3 train.py --data_location=/home/code/elem --smartstaged=True --no_eval
 ```
@@ -53,6 +57,8 @@ bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_mem
 
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestLookupOrCreateElastic
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestMultiTierLookupOrCreate
+
+heaptrack ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestCacheUpdateAndEviction
 ```
 
 ## PY代码修改

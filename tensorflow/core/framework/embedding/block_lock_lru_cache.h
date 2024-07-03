@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "sparsehash/dense_hash_map_lockless"
+#include "sparsehash/dense_hash_set_lockless"
 #include "tensorflow/core/framework/embedding/cache.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/types.h"
@@ -40,7 +40,6 @@ class BlockLockLRUCache : public BatchCache<K> {
         global_version_(0),
         is_expanding_(false),
         is_rehash_(false) {
-    size_strict_ = 0;
     block_count_ = (capacity + way_ - 1) / way_;
     capacity_ = block_count_ * way_;
     base_capacity_ = capacity_;
@@ -53,12 +52,8 @@ class BlockLockLRUCache : public BatchCache<K> {
                                    &is_record_hitrate_));
     BatchCache<K>::num_hit = new int64[num_threads_ * 16]();
     BatchCache<K>::num_miss = new int64[num_threads_ * 16]();
-    // evicted.max_load_factor(0.8);
-    // evicted.set_empty_key_and_value(EMPTY_CACHE_KEY, -1);
-    // evicted.set_counternum(16);
-    // evicted.set_deleted_key(DELETED_CACHE_KEY);
     evicted.max_load_factor(0.8);
-    evicted.set_empty_key_and_value(EMPTY_CACHE_KEY, 0);
+    evicted.set_empty_key_and_value(EMPTY_CACHE_KEY, -1);
     evicted.set_counternum(16);
     evicted.set_deleted_key(DELETED_CACHE_KEY);
   }
@@ -78,9 +73,6 @@ class BlockLockLRUCache : public BatchCache<K> {
     size_t total_size = size_[0].val;
     for (size_t j = 1; j < num_threads_; ++j) {
       total_size += size_[j].val;
-    }
-    if (total_size != size_strict_) {
-      LOG(INFO) << "size_strict_ = " << size_strict_;
     }
     return total_size;
   }
@@ -106,17 +98,15 @@ class BlockLockLRUCache : public BatchCache<K> {
   }
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
-    // mutex_lock l(evic_mu_);
+    mutex_lock l(evic_mu_);
     size_t evicted_size = evicted.size_lockless();
     if (evicted_size == 0) {
       return 0;
     }
-    // LOG(INFO) << "Before K Size = " << k_size;
-    // LOG(INFO) << "Before Evicted Size = " << evicted.size_lockless();
     size_t true_size = 0;
     for (auto id : evicted) {
       if (true_size < k_size) {
-        evic_ids[true_size] = id.first;
+        evic_ids[true_size] = id;
         ++true_size;
       }
     }
@@ -127,14 +117,11 @@ class BlockLockLRUCache : public BatchCache<K> {
       mutex_lock l(sync_idx_mu_);
       thread_idx = (thread_count_idx++) % num_threads_;
     }
-    __sync_fetch_and_sub(&size_strict_, true_size);
     size_[thread_idx].val -= true_size;
-    // LOG(INFO) << "After Evicted Size = " << evicted.size_lockless();
     return true_size;
   }
 
   void update(const K* batch_ids, size_t batch_size, bool use_locking = true) {
-    // mutex_lock l(evic_mu_);
     __sync_fetch_and_add(&global_version_, 1);
     bool found;
     bool insert;
@@ -151,9 +138,6 @@ class BlockLockLRUCache : public BatchCache<K> {
       mutex_lock l(curr_block.mtx_cached);
       for (size_t j = 0; j < curr_cached.size(); ++j) {
         if (id == curr_cached[j].id) {
-          // LOG(INFO) << "Found ID = " << id
-          //           << ", Version: " << curr_cached[j].value << " --> "
-          //           << global_version_;
           curr_cached[j].value = global_version_;
           found = true;
           ++batch_hit;
@@ -164,8 +148,6 @@ class BlockLockLRUCache : public BatchCache<K> {
         batch_miss++;
         if (!evicted.erase_lockless(id)) {
           ++size_add;
-          __sync_fetch_and_add(&size_strict_, 1);
-          // LOG(INFO) << "Size++ By " << id;
         }
         if (is_expanding_ && curr_cached.size() < new_way_) {
           curr_cached.emplace_back(id, global_version_);
@@ -175,9 +157,6 @@ class BlockLockLRUCache : public BatchCache<K> {
           min_version = std::numeric_limits<size_t>::max();
           for (size_t j = 0; j < curr_cached.size(); ++j) {
             if (BlockLockLRUCache<K>::EMPTY_CACHE_KEY == curr_cached[j].id) {
-              // LOG(INFO) << "Insert ID = " << id
-              //           << ", Version: " << curr_cached[j].value << " --> "
-              //           << global_version_;
               curr_cached[j].id = id;
               curr_cached[j].value = global_version_;
               insert = true;
@@ -188,11 +167,7 @@ class BlockLockLRUCache : public BatchCache<K> {
             }
           }
           if (!insert) {
-            // LOG(INFO) << "Replace ID: " << curr_cached[min_j].id << " --> "
-            //           << id << ", Version: " << curr_cached[min_j].value
-            //           << " --> " << global_version_;
-            evicted.insert_lockless({curr_cached[min_j].id, curr_cached[min_j].value});
-            // evicted.insert_lockless(curr_cached[min_j].id);
+            evicted.insert_lockless(curr_cached[min_j].id);
             curr_cached[min_j].id = id;
             curr_cached[min_j].value = global_version_;
           }
@@ -240,9 +215,8 @@ class BlockLockLRUCache : public BatchCache<K> {
   };
 
   std::vector<CacheBlock*> cache_;
-  // typedef google::dense_hash_map_lockless<K> LocklessHashMap2;
-  typedef google::dense_hash_map_lockless<K, size_t> LocklessHashMap2;
-  LocklessHashMap2 evicted;
+  typedef google::dense_hash_set_lockless<K> LocklessHashSet;
+  LocklessHashSet evicted;
   mutex sync_idx_mu_;
   size_t block_count_;
   size_t evic_idx_;
@@ -256,7 +230,6 @@ class BlockLockLRUCache : public BatchCache<K> {
   bool is_rehash_;
   mutex evic_mu_;
   SizeDataBlock* size_;
-  size_t size_strict_;
   size_t global_version_;
   bool is_record_hitrate_;
   unsigned int thread_count_idx;

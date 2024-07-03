@@ -112,6 +112,8 @@ class Storage {
 
   virtual Status Eviction(K* evict_ids, int64 evict_size) = 0;
 
+  virtual void BatchEviction() {}
+
   virtual void CopyEmbeddingsFromCPUToGPU(
       int total, const K* keys,
       const std::list<int64>& copyback_cursor,

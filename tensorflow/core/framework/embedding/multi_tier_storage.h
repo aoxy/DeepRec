@@ -135,15 +135,16 @@ class MultiTierStorage : public Storage<K, V> {
     return Status::OK();
   }
 
-  virtual void BatchEviction() {
+  virtual void BatchEviction() override {
     constexpr int EvictionSize = 10000;
+    constexpr int MinEvictionSize = 100;
     K evic_ids[EvictionSize];
     if (!ready_eviction_)
       return;
     int cache_count = cache_->size();
     cache_capacity_ = cache_->get_capacity();
-    if (cache_count > cache_capacity_) {
-      int k_size = cache_count - cache_capacity_;
+    int k_size = cache_count - cache_capacity_;
+    if (k_size > MinEvictionSize) {
       k_size = std::min(k_size, EvictionSize);
       size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
       EvictionWithDelayedDestroy(evic_ids, true_size);
@@ -203,9 +204,10 @@ class MultiTierStorage : public Storage<K, V> {
       int64* version_buff = (int64*)restore_buff.version_buffer;
       int64* freq_buff = (int64*)restore_buff.freq_buffer;
       cache_->update(key_buff, key_num, version_buff, freq_buff);
-      auto cache_capacity = CacheCapacity();
-      if (cache_->size() > cache_capacity) {
-        int64 evict_size = cache_->size() - cache_capacity;
+      auto cache_capacity = cache_->get_capacity();
+      auto cache_count = cache_->size();
+      if (cache_count > cache_capacity) {
+        int64 evict_size = cache_count - cache_capacity;
         std::vector<K> evict_ids(evict_size);
         size_t true_size =
             cache_->get_evic_ids(evict_ids.data(), evict_size);
