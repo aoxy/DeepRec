@@ -56,7 +56,7 @@ bazel build -c opt --config=opt //tensorflow/core/kernels:embedding_variable_mem
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingvariableTest.TestBLFUCachePrefetch
 
 ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestLookupOrCreateElastic
-./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestMultiTierLookupOrCreate
+./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestCacheUpdateAndEvictionTable
 
 heaptrack ./bazel-bin/tensorflow/core/kernels/embedding_variable_performance_test --gtest_filter=EmbeddingVariablePerformanceTest.TestCacheUpdateAndEviction
 ```
@@ -84,13 +84,13 @@ yum install docker-ce docker-ce-cli containerd.io
 
 # Ubuntu
 apt update
-apt-get install htop
-apt-get install git-all
+apt-get install htop -y
+apt-get install git-all -y
 apt-get remove docker docker-engine docker.io containerd runc
-apt-get install ca-certificates curl gnupg lsb-release
+apt-get install ca-certificates curl gnupg lsb-release -y
 curl -fsSL http://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg | sudo apt-key add -
 add-apt-repository "deb [arch=amd64] http://mirrors.aliyun.com/docker-ce/linux/ubuntu $(lsb_release -cs) stable"
-apt-get install docker-ce docker-ce-cli containerd.io
+apt-get install docker-ce docker-ce-cli containerd.io -y
 
 systemctl start docker
 mkdir -p /home/aoxuyang/code/aoxy
@@ -110,7 +110,7 @@ ulimit -c unlimited
 echo '1' > /proc/sys/kernel/core_uses_pid
 echo "./core-%e-%p-%t"> /proc/sys/kernel/core_pattern
 apt-get update
-apt-get install gdb
+apt-get install gdb -y
 ```
 
 ```shell

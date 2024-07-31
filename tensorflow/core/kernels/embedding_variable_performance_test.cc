@@ -797,7 +797,7 @@ void update_cache(BatchCache<int64>* cache, google::dense_hash_map_lockless<int6
       }
       size_t size2 = hmap->size_lockless();
       size_t csize2 = cache->size();
-      LOG(INFO) << std::this_thread::get_id() << " :: Map dsize = " << size1 - size2 << ", Cache dsize = " << csize1 - csize2;
+      // LOG(INFO) << std::this_thread::get_id() << " :: Map dsize = " << size1 - size2 << ", Cache dsize = " << csize1 - csize2;
     }
     cache->update(&input_batch[i], 1);
     hmap->insert_lockless({input_batch[i], EvictionSize});
@@ -833,9 +833,11 @@ double PerfCacheUpdateAndEviction(
     }
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (int i = 0; i < num_thread; i++) {
-      if (k == 0)
-        LOG(INFO) << "Thread:" << i << "[" << thread_task_range[i].first << ", "
-                  << thread_task_range[i].second << "]";
+      // if (k == 0) {
+      //   LOG(INFO) << "Thread:" << i << "[" << thread_task_range[i].first <<
+      //   ", "
+      //             << thread_task_range[i].second << "]";
+      //   }
       worker_threads[i] =
           std::thread(update_cache, cache, &hmap, input_batches[k].data(),
                       evict_ids[i].data(), thread_task_range[i].first,
@@ -848,22 +850,22 @@ double PerfCacheUpdateAndEviction(
     if (k > 10)
       total_time += ((double)(end.tv_sec - start.tv_sec) * 1000000000 +
                      end.tv_nsec - start.tv_nsec);
-    LOG(INFO) << k << "]Cache: " << cache->size()
+    LOG(INFO) << "[" << k << "/" << input_batches.size()
+              << "]Cache: " << cache->size()
               << ", Map: " << hmap.size_lockless();
   }
   if (cache->size() > cache->get_capacity()) {
     size_t k_size = cache->size() - cache->get_capacity();
-    LOG(INFO) << "k_size: " << k_size;
     std::vector<int64> evict_ids_buf(k_size);
     size_t true_size = cache->get_evic_ids(evict_ids_buf.data(), k_size);
     for (size_t t = 0; t < true_size; t++) {
       hmap.erase_lockless(evict_ids_buf[t]);
     }
   }
-  
-  
+
   LOG(INFO) << "Evicted Cache: " << cache->size()
-              << ", Map: " << hmap.size_lockless();
+            << ", Map: " << hmap.size_lockless();
+  LOG(INFO) << cache->DebugString();
   delete cache;
   return total_time;
 }
@@ -904,10 +906,57 @@ void TestCacheUpdateAndEviction(std::string title, CacheStrategy cache_strategy)
   }
 }
 
+void TestCacheUpdateAndEvictionTable() {
+  int num_of_batch = 20;
+  int batch_size = 1024 * 128;
+  int num_of_ids = 5000000;
+  std::vector<std::vector<int64>> input_batches(num_of_batch);
+  for (int i = 0; i < num_of_batch; i++) {
+    input_batches[i].resize(batch_size);
+  }
+  LOG(INFO) << "Start generating skew input";
+  GenerateSkewInput(num_of_ids, 0.8, input_batches, true);
+  LOG(INFO) << "Finish generating skew input";
+
+  std::set<int64> uids;
+  for (int i = 0; i < input_batches.size(); i++) {
+    for (size_t j = 0; j < input_batches[i].size(); j++) {
+      uids.insert(input_batches[i][j]);
+    }
+  }
+  LOG(INFO) << "Unique id count = " << uids.size();
+  int capacity = uids.size() >> 1;
+  LOG(INFO) << "Cache capacity = " << capacity << " ("
+            << capacity * 100 / uids.size() << "%)";
+
+  std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
+  std::vector<CacheStrategy> cache_strategy_vec(
+      {CacheStrategy::LRU, CacheStrategy::LFU, CacheStrategy::B8LRU,
+       CacheStrategy::B8LFU});
+  for (auto num_thread : num_thread_vec) {
+    for (auto cache_strategy : cache_strategy_vec) {
+      double exec_time = PerfCacheUpdateAndEviction(
+          input_batches, cache_strategy, capacity, num_thread);
+      if (exec_time == -1.0) {
+        LOG(INFO) << " Test Failed";
+      } else {
+        LOG(INFO) << " Performance With " << num_thread
+                  << " threads: " << exec_time / 1000000 << " ms";
+      }
+    }
+  }
+}
+
 TEST(EmbeddingVariablePerformanceTest, TestCacheUpdateAndEviction) {
   setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
   TestCacheUpdateAndEviction("TestCacheUpdateAndEviction:BLRU(8)",
-                            CacheStrategy::B8LRU);
+                             CacheStrategy::B8LRU);
+  unsetenv("TF_CACHE_RECORD_HITRATE");
+}
+
+TEST(EmbeddingVariablePerformanceTest, TestCacheUpdateAndEvictionTable) {
+  setenv("TF_CACHE_RECORD_HITRATE", "true", 1);
+  TestCacheUpdateAndEvictionTable();
   unsetenv("TF_CACHE_RECORD_HITRATE");
 }
 

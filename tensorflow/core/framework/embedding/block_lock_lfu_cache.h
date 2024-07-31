@@ -45,11 +45,9 @@ class BlockLockLFUCache : public BatchCache<K> {
     for (size_t i = 0; i < block_count_; i++) {
       cache_[i] = new CacheBlock(way_);
     }
-    size_ = new SizeDataBlock[num_threads_]();
     TF_CHECK_OK(ReadBoolFromEnvVar("TF_CACHE_RECORD_HITRATE", false,
                                    &is_record_hitrate_));
-    BatchCache<K>::num_hit = new int64[num_threads_ * 16]();
-    BatchCache<K>::num_miss = new int64[num_threads_ * 16]();
+    BatchCache<K>::size_data_.resize(num_threads_);
     evicted.max_load_factor(0.8);
     evicted.set_empty_key_and_value(EMPTY_CACHE_KEY, -1);
     evicted.set_counternum(16);
@@ -58,9 +56,6 @@ class BlockLockLFUCache : public BatchCache<K> {
 
   ~BlockLockLFUCache() override {
     LOG(INFO) << "BLFU Evicted Size = " << evicted.size_lockless();
-    delete[] size_;
-    delete[] BatchCache<K>::num_hit;
-    delete[] BatchCache<K>::num_miss;
   }
 
   size_t get_capacity() override { return capacity_; }
@@ -113,28 +108,6 @@ class BlockLockLFUCache : public BatchCache<K> {
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
       __sync_bool_compare_and_swap(&is_expanding_, false, true);
     }
-  }
-
-  size_t size() {
-    size_t total_size = size_[0].val;
-    for (size_t j = 1; j < num_threads_; ++j) {
-      total_size += size_[j].val;
-    }
-    return total_size;
-  }
-
-  float hit_rate() override {
-    float hit_rate = 0.0;
-    size_t total_hit = this->num_hit[0];
-    size_t total_miss = this->num_miss[0];
-    for (size_t j = 1; j < num_threads_; ++j) {
-      total_hit += this->num_hit[j * 16];
-      total_miss += this->num_miss[j * 16];
-    }
-    if (total_hit > 0 || total_miss > 0) {
-      hit_rate = total_hit * 100.0 / (total_hit + total_miss);
-    }
-    return hit_rate;
   }
 
   size_t get_cached_ids(K* cached_ids, size_t k_size, int64* cached_versions,
@@ -195,7 +168,7 @@ class BlockLockLFUCache : public BatchCache<K> {
       mutex_lock l(sync_idx_mu_);
       sync_idx = (sync_idx_count++) % num_threads_;
     }
-    size_[sync_idx].val -= true_size;
+    BatchCache<K>::size_data_[sync_idx].size_ -= true_size;
     return true_size;
   }
 
@@ -255,10 +228,10 @@ class BlockLockLFUCache : public BatchCache<K> {
       mutex_lock l(sync_idx_mu_);
       sync_idx = (sync_idx_count++) % num_threads_;
     }
-    size_[sync_idx].val += size_add;
+    BatchCache<K>::size_data_[sync_idx].size_ += size_add;
     if (is_record_hitrate_) {
-      this->num_hit[sync_idx * 16] += batch_hit;
-      this->num_miss[sync_idx * 16] += batch_miss;
+      BatchCache<K>::size_data_[sync_idx].num_hit_ += batch_hit;
+      BatchCache<K>::size_data_[sync_idx].num_miss_ += batch_miss;
     }
   }
 
@@ -320,10 +293,10 @@ class BlockLockLFUCache : public BatchCache<K> {
       mutex_lock l(sync_idx_mu_);
       sync_idx = (sync_idx_count++) % num_threads_;
     }
-    size_[sync_idx].val += size_add;
+    BatchCache<K>::size_data_[sync_idx].size_ += size_add;
     if (is_record_hitrate_) {
-      this->num_hit[sync_idx * 16] += batch_hit;
-      this->num_miss[sync_idx * 16] += batch_miss;
+      BatchCache<K>::size_data_[sync_idx].num_hit_ += batch_hit;
+      BatchCache<K>::size_data_[sync_idx].num_miss_ += batch_miss;
     }
   }
 
@@ -345,8 +318,7 @@ class BlockLockLFUCache : public BatchCache<K> {
           if (id == curr_cached[j].id) {
             curr_cached[j].id = BlockLockLFUCache<K>::EMPTY_CACHE_KEY;
             freq = curr_cached[j].count;
-            // __sync_fetch_and_sub(size_ + (sync_idx % num_threads_), 1);
-            size_[sync_idx].val--;
+            BatchCache<K>::size_data_[sync_idx].size_--;
             break;
           }
         }
@@ -419,7 +391,6 @@ class BlockLockLFUCache : public BatchCache<K> {
   bool is_rehash_;
   mutex evic_mu_;
   mutex rehash_mu_;
-  SizeDataBlock* size_;
   bool is_record_hitrate_;
   unsigned int sync_idx_count;
   static const K EMPTY_CACHE_KEY;

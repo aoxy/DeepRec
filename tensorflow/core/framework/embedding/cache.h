@@ -18,6 +18,19 @@
 namespace tensorflow {
 namespace embedding {
 
+struct alignas(64) SizeDataBlock {
+  size_t size_;
+  size_t num_hit_;
+  size_t num_miss_;  // Padding to fill one cache line (64 bytes)
+  char _padding[64 - 3 * sizeof(size_t)];
+  SizeDataBlock() : size_(0), num_hit_(0), num_miss_(0) {}
+  void reset() {
+    size_ = 0;
+    num_hit_ = 0;
+    num_miss_ = 0;
+  }
+};
+
 template <class K>
 class BatchCache {
  public:
@@ -47,24 +60,49 @@ class BatchCache {
                       bool use_locking = true) = 0;
   virtual void add_to_prefetch_list(const K* batch_ids, size_t batch_size) = 0;
   virtual void add_to_cache(const K* batch_ids, size_t batch_size) = 0;
-  virtual size_t size() = 0;
+  virtual size_t size() {
+    size_t total_size = 0;
+    for (SizeDataBlock& sdb : size_data_) {
+      total_size += sdb.size_;
+    }
+    return total_size;
+  }
   virtual size_t get_capacity() = 0;
   virtual void set_capacity(size_t new_capacity) = 0;
   virtual void reset_status() {
-    *num_hit = 0;
-    *num_miss = 0;
+    for (SizeDataBlock& sdb : size_data_) {
+      sdb.reset();
+    }
   }
   virtual float hit_rate() {
     float hit_rate = 0.0;
-    if (*num_hit > 0 || *num_miss > 0) {
-      hit_rate = *num_hit * 100.0 / (*num_hit + *num_miss);
+    size_t total_num_hit = 0;
+    size_t total_num_access = 0;
+    for (SizeDataBlock& sdb : size_data_) {
+      total_num_hit += sdb.num_hit_;
+      total_num_access += sdb.num_miss_;
+    }
+    total_num_access += total_num_hit;
+    if (total_num_access > 0) {
+      hit_rate = total_num_hit * 100.0 / (total_num_access);
     }
     return hit_rate;
   }
   std::string DebugString() {
-    return strings::StrCat("HitRate = ", hit_rate(),
-                           " %, visit_count = ", *num_hit + *num_miss,
-                           ", hit_count = ", *num_hit);
+    float hit_rate = 0.0;
+    size_t total_num_hit = 0;
+    size_t total_num_access = 0;
+    for (SizeDataBlock& sdb : size_data_) {
+      total_num_hit += sdb.num_hit_;
+      total_num_access += sdb.num_miss_;
+    }
+    total_num_access += total_num_hit;
+    if (total_num_access > 0) {
+      hit_rate = total_num_hit * 100.0 / (total_num_access);
+    }
+    return strings::StrCat("HitRate = ", hit_rate,
+                           " %, visit_count = ", total_num_access,
+                           ", hit_count = ", total_num_hit);
   }
   virtual mutex_lock maybe_lock_cache(mutex& mu, mutex& temp_mu,
                                       bool use_locking) {
@@ -78,8 +116,7 @@ class BatchCache {
   }
 
  protected:
-  int64* num_hit;
-  int64* num_miss;
+  std::vector<SizeDataBlock> size_data_;
 };
 
 template <class K>
@@ -133,11 +170,10 @@ class LRUCache : public BatchCache<K> {
     tail = new LRUNode(0);
     head->next = tail;
     tail->pre = head;
-    BatchCache<K>::num_hit = new int64();
-    BatchCache<K>::num_miss = new int64();
+    BatchCache<K>::size_data_.resize(1);
   }
 
-  size_t size() {
+  size_t size() override {
     mutex_lock l(mu_);
     return mp.size();
   }
@@ -189,7 +225,7 @@ class LRUCache : public BatchCache<K> {
         node->next = head->next;
         head->next = node;
         node->pre = head;
-        *BatchCache<K>::num_hit++;
+        BatchCache<K>::size_data_[0].num_hit_++;
       } else {
         LRUNode* newNode = new LRUNode(id);
         head->next->pre = newNode;
@@ -197,7 +233,7 @@ class LRUCache : public BatchCache<K> {
         head->next = newNode;
         newNode->pre = head;
         mp[id] = newNode;
-        *BatchCache<K>::num_miss++;
+        BatchCache<K>::size_data_[0].num_miss_++;
       }
     }
   }
@@ -272,15 +308,14 @@ class LFUCache : public BatchCache<K> {
     max_freq = 0;
     freq_table.emplace_back(
         std::pair<std::list<LFUNode>*, int64>(new std::list<LFUNode>, 0));
-    BatchCache<K>::num_hit = new int64();
-    BatchCache<K>::num_miss = new int64();
+    BatchCache<K>::size_data_.resize(1);
   }
 
   size_t get_capacity() override { return capacity_; }
 
   void set_capacity(size_t new_capacity) override {}
 
-  size_t size() {
+  size_t size() override {
     mutex_lock l(mu_);
     return key_table.size();
   }
@@ -359,7 +394,7 @@ class LFUCache : public BatchCache<K> {
         key_table[id] = freq_table[0].first->begin();
         min_freq = 1;
         max_freq = std::max(max_freq, min_freq);
-        *BatchCache<K>::num_miss++;
+        BatchCache<K>::size_data_[0].num_miss_++;
       } else {
         typename std::list<LFUNode>::iterator node = it->second;
         size_t freq = node->freq;
@@ -376,7 +411,7 @@ class LFUCache : public BatchCache<K> {
         freq_table[freq].first->emplace_front(LFUNode(id, freq + 1));
         freq_table[freq].second++;
         key_table[id] = freq_table[freq].first->begin();
-        *BatchCache<K>::num_hit++;
+        BatchCache<K>::size_data_[0].num_hit_++;
       }
     }
   }
@@ -410,7 +445,7 @@ class LFUCache : public BatchCache<K> {
         freq_table[freq - 1].first->emplace_front(LFUNode(id, freq));
         freq_table[freq - 1].second++;
         key_table[id] = freq_table[freq - 1].first->begin();
-        *BatchCache<K>::num_miss++;
+        BatchCache<K>::size_data_[0].num_miss_++;
       } else {
         typename std::list<LFUNode>::iterator node = it->second;
         size_t last_freq = node->freq;
@@ -433,7 +468,7 @@ class LFUCache : public BatchCache<K> {
         freq_table[curr_freq - 1].first->emplace_front(LFUNode(id, curr_freq));
         freq_table[curr_freq - 1].second++;
         key_table[id] = freq_table[curr_freq - 1].first->begin();
-        *BatchCache<K>::num_hit++;
+        BatchCache<K>::size_data_[0].num_hit_++;
       }
     }
   }
