@@ -27,8 +27,8 @@ from tensorflow.python.feature_column import utils as fc_utils
 from tensorflow.python.feature_column import feature_column_v2
 from tensorflow.core.framework.embedding import config_pb2
 
-result_dir='/tmp/tianchi/result/DLRM/'
-result_path=result_dir+'result'
+result_dir='./result/'
+result_path=result_dir+'time_result'
 global_time_cost = 0
 global_auc = 0
 
@@ -350,8 +350,9 @@ def build_feature_columns():
         storage_type_inst = config_pb2.StorageType.DRAM_SSDHASH
         storage_type_str = 'StorageType.DRAM_SSDHASH'
     cache_cap_mb = args.cache_cap * 100 * (EMBEDDING_DIMENSIONS // 16)
+    os.makedirs(args.emb_dir, exist_ok=True)
     storage_option = tf.StorageOption(storage_type=storage_type_inst,
-                                  storage_path="/tmp/ssd_utpy",
+                                  storage_path=args.emb_dir,
                                   storage_size=[1024 * 1024 * cache_cap_mb],
                                   cache_strategy = config_pb2.CacheStrategy.B8LRU)
                                   
@@ -654,6 +655,10 @@ def get_arg_parser():
                         help='Whether to enable Auto graph fusion feature.',
                         type=boolean_string,
                         default=True)
+    parser.add_argument('--emb_dir',
+                        help='Full path to store embeddings on SSD',
+                        required=False,
+                        default='./temp_emb')
     parser.add_argument('--cache_cap',
                         help='Cache Capacity(x100MB).',
                         type=int,
