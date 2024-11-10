@@ -34,49 +34,53 @@ namespace tensorflow {
 namespace embedding {
 typedef uint32 EmbPosition;
 
+const uint32 kEmbPositionVersionMod = 0b111111111111;
+const uint32 kEmbPositionVersionMask = 0b11111111111100000000000000000000;
+const uint32 kEmbPositionOffsetMask  = 0b00000000000011111111111111111100; // support dim >= 42
+const uint32 kEmbPositionInvalidMask = 0b00000000000000000000000000000010;
+const uint32 kEmbPositionFlushedMask = 0b00000000000000000000000000000001;
+
 static inline EmbPosition SetEmbPositionVersion(EmbPosition& ep, uint32 offset) {
-  ep &= ~static_cast<uint32>(0xfe000000);
-  ep |= offset << 25;
+  ep &= ~static_cast<uint32>(kEmbPositionVersionMask);
+  ep |= offset << 20;
   return ep;
 }
 
 static inline EmbPosition SetEmbPositionOffset(EmbPosition& ep, uint32 offset) {
-  ep &= ~static_cast<uint32>(0x1fffffc);
+  ep &= ~kEmbPositionOffsetMask;
   ep |= offset << 2;
   return ep;
 }
 
 static inline EmbPosition SetEmbPositionInvalid(EmbPosition& ep, bool invalid) {
-  ep &= ~static_cast<uint32>(2);
-  ep |= static_cast<uint32>(invalid) << 1;
+  ep &= ~kEmbPositionInvalidMask;
+  ep |= invalid << 1;
   return ep;
 }
 
 static inline EmbPosition SetEmbPositionFlushed(EmbPosition& ep, bool flushed) {
   if (flushed) {
-    ep |= static_cast<uint32>(1);
+    ep |= kEmbPositionFlushedMask;
   } else {
-    ep &= ~static_cast<uint32>(1);
+    ep &= ~kEmbPositionFlushedMask;
   }
   return ep;
 }
 
 static inline uint32 GetEmbPositionVersion(EmbPosition& ep) {
-  // 0b11111110000000000000000000000000
-  return (ep & static_cast<uint32>(0xfe000000)) >> 25;
+  return (ep & kEmbPositionVersionMask) >> 20;
 }
 
 static inline uint32 GetEmbPositionOffset(EmbPosition& ep) {
-  // 0b00000001111111111111111111111100
-  return (ep & static_cast<uint32>(0x1fffffc)) >> 2;
+  return (ep & kEmbPositionOffsetMask) >> 2;
 }
 
 static inline bool IsEmbPositionInvalid(EmbPosition& ep) {
-  return ep & static_cast<uint32>(2);
+  return ep & kEmbPositionInvalidMask;
 }
 
 static inline bool IsEmbPositionFlushed(EmbPosition& ep) {
-  return ep & static_cast<uint32>(1);
+  return ep & kEmbPositionFlushedMask;
 }
 
 static inline bool IsEmbPositionSameIgnoreStatus(EmbPosition& ep1, EmbPosition& ep2) {
@@ -216,8 +220,8 @@ class SSDHashKV : public KVInterface<K, V> {
   void Init() {
     val_len_ = feat_desc_->data_bytes();
     file_capacity_ = BUFFER_SIZE / val_len_;
-    if (file_capacity_ >= (1 << 23)) {
-      LOG(FATAL) << "The 23-bit offset is not enough to save the Embedding of length " << val_len_ << " in the SSD KV.";
+    if (file_capacity_ >= (1 << 18)) {
+      LOG(FATAL) << "The 18-bit offset is not enough to save the Embedding of length " << val_len_ << " in the SSD KV.";
     }
     write_buffer_ = new char[BUFFER_SIZE];
     key_buffer_ = new K[file_capacity_];
@@ -457,7 +461,7 @@ class SSDHashKV : public KVInterface<K, V> {
 
  private:
   void WriteFile(size_t version, size_t curr_buffer_offset) {
-    version = version & static_cast<uint32>(0b1111111);
+    version = version & kEmbPositionVersionMod;
     emb_files_[version]->Reopen();
     emb_files_[version]->Write(write_buffer_, curr_buffer_offset);
     emb_files_[version]->Flush();
@@ -467,12 +471,12 @@ class SSDHashKV : public KVInterface<K, V> {
     if (need_increase) {
       ++current_version_;
     }
-    uint32 version = current_version_ & static_cast<uint32>(0b1111111);
+    uint32 version = current_version_ & kEmbPositionVersionMod;
     if (version < emb_files_.size()) {
       while (!emb_files_[version]->IsDeleted()) {
         VLOG(0) << "Embedding file still exists. version = " << version;
         ++current_version_;
-        version = current_version_ & static_cast<uint32>(0b1111111);
+        version = current_version_ & kEmbPositionVersionMod;
       }
       delete emb_files_[version];
       emb_files_[version] =
@@ -508,7 +512,7 @@ class SSDHashKV : public KVInterface<K, V> {
 
   void SaveKV(K key, const void* value_ptr,
       bool is_compaction = false) {
-    uint32 temp_current_version_ = current_version_ & static_cast<uint32>(0b1111111);
+    uint32 temp_current_version_ = current_version_ & kEmbPositionVersionMod;
     EmbPosition ep = CreateEmbPosition(current_offset_, temp_current_version_, false);
     AppendToWriteBuffer(key, value_ptr);
     EmbPosition old_posi = UpdatePositionEnsure(key, ep);

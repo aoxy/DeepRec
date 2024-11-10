@@ -81,7 +81,7 @@ TYPE_COLS = ['time_type', 'time_type_list']
 TYPE_LIST = ['lunch', 'night', 'dinner', 'tea', 'breakfast']
 
 HASH_BUCKET_SIZES = 100000
-EMBEDDING_DIMENSIONS = 16 * 4
+EMBEDDING_DIMENSIONS = 16 * 4 * 4
 
 
 class DLRM():
@@ -745,7 +745,7 @@ def set_env_for_DeepRec():
     os.environ['TF_EMBEDDING_FBJ_OPT'] = 'False'
     os.environ['TF_SSDHASH_ASYNC_COMPACTION'] = 'False'
     os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
-    os.environ['TF_SSDHASH_IO_SCHEME'] = 'mmap_and_madvise' # directio, mmap_and_madvise
+    os.environ['TF_SSDHASH_IO_SCHEME'] = 'directio' # directio, mmap_and_madvise
     os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
     # os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
 
