@@ -932,7 +932,9 @@ void TestCacheUpdateAndEvictionTable() {
   std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
   std::vector<CacheStrategy> cache_strategy_vec(
       {CacheStrategy::LRU, CacheStrategy::LFU, CacheStrategy::B8LRU,
-       CacheStrategy::B8LFU});
+       CacheStrategy::B8LFU, CacheStrategy::B16LRU,
+       CacheStrategy::B16LFU, CacheStrategy::B32LRU,
+       CacheStrategy::B32LFU});
   for (auto num_thread : num_thread_vec) {
     for (auto cache_strategy : cache_strategy_vec) {
       double exec_time = PerfCacheUpdateAndEviction(

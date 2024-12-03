@@ -295,12 +295,12 @@ class KvResourceGatherOp : public OpKernel {
                           reinterpret_cast<TValue*>(c->input(2).data()));
       } else {
         ev->GetEmbeddings(ev_ctx, (TKey*)indices.data(), out_base, N);
-        if (has_counts) {
-          const Tensor& indices_counts = c->input(2);
-          ev->UpdateCache(indices, indices_counts, true);
-        } else {
-          ev->UpdateCache(indices, true);
-        }
+      }
+      if (has_counts) {
+        const Tensor& indices_counts = c->input(2);
+        ev->UpdateCache(indices, indices_counts, true);
+      } else {
+        ev->UpdateCache(indices, true);
       }
     }
   }

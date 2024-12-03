@@ -392,58 +392,7 @@ def build_feature_columns():
     return dense_column, sparse_column
 
 
-def train(sess_config,
-          input_hooks,
-          model,
-          data_init_op,
-          steps,
-          checkpoint_dir,
-          tf_config=None,
-          server=None):
-    model.is_training = True
-    hooks = []
-    hooks.extend(input_hooks)
-
-    scaffold = tf.train.Scaffold(
-        local_init_op=tf.group(tf.tables_initializer(),
-                               tf.local_variables_initializer(), data_init_op),
-        saver=tf.train.Saver(max_to_keep=args.keep_checkpoint_max))
-
-    stop_hook = tf.train.StopAtStepHook(last_step=steps)
-    log_hook = tf.train.LoggingTensorHook(
-        {
-            'steps': model.global_step,
-            'loss': model.loss
-        }, every_n_iter=100)
-    hooks.append(stop_hook)
-    hooks.append(log_hook)
-    if args.timeline > 0:
-        hooks.append(
-            tf.train.ProfilerHook(save_steps=args.timeline,
-                                  output_dir=checkpoint_dir))
-    save_steps = args.save_steps if args.save_steps or args.no_eval else steps
-
-    time_start = time.perf_counter()
-    with tf.train.MonitoredTrainingSession(
-            master=server.target if server else '',
-            is_chief=tf_config['is_chief'] if tf_config else True,
-            hooks=hooks,
-            scaffold=scaffold,
-            checkpoint_dir=checkpoint_dir,
-            save_checkpoint_steps=steps,
-            summary_dir=checkpoint_dir,
-            save_summaries_steps=None,
-            config=sess_config) as sess:
-        while not sess.should_stop():
-            sess.run([model.loss, model.train_op])
-    time_end = time.perf_counter()
-    print("Training completed.")
-    time_cost = time_end - time_start
-    global global_time_cost
-    global_time_cost = time_cost
-
-
-def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
+def inference(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
     model.is_training = False
     hooks = []
     hooks.extend(input_hooks)
@@ -453,70 +402,49 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
                                tf.local_variables_initializer(), data_init_op))
     session_creator = tf.train.ChiefSessionCreator(
         scaffold=scaffold, checkpoint_dir=checkpoint_dir, config=sess_config)
-    writer = tf.summary.FileWriter(os.path.join(checkpoint_dir, 'eval'))
-    merged = tf.summary.merge_all()
 
     with tf.train.MonitoredSession(session_creator=session_creator,
                                    hooks=hooks) as sess:
         for _in in range(1, steps + 1):
             if (_in != steps):
-                sess.run([model.acc_op, model.auc_op])
+                sess.run([model.probability])
                 if (_in % 100 == 0):
-                    print("Evaluation complate:[{}/{}]".format(_in, steps))
+                    print("Inference complate:[{}/{}]".format(_in, steps))
             else:
-                eval_acc, eval_auc, events = sess.run(
-                    [model.acc_op, model.auc_op, merged])
-                writer.add_summary(events, _in)
-                print("Evaluation complate:[{}/{}]".format(_in, steps))
-                print("ACC = {}\nAUC = {}".format(eval_acc, eval_auc))
-                global global_auc
-                global_auc = eval_auc
+                sess.run([model.probability])
+                print("Inference complate:[{}/{}]".format(_in, steps))
 
 
 def main(tf_config=None, server=None):
     # check dataset and count data set size
     print("Checking dataset...")
-    train_file = os.path.join(args.data_location, 'train_b.csv')
-    test_file = os.path.join(args.data_location, 'eval.csv')
-    if (not os.path.exists(train_file)) or (not os.path.exists(test_file)):
+    test_file = os.path.join(args.data_location, 'eval_b.csv')
+    if (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_training_examples = sum(1 for line in open(train_file))
     no_of_test_examples = sum(1 for line in open(test_file))
 
     # set batch size, eporch & steps
     batch_size = args.batch_size
 
-    if args.steps == 0:
-        no_of_epochs = 1
-        train_steps = math.ceil(
-            (float(no_of_epochs) * no_of_training_examples) / batch_size)
-    else:
-        no_of_epochs = math.ceil(
-            (float(batch_size) * args.steps) / no_of_training_examples)
-        train_steps = args.steps
     test_steps = math.ceil(float(no_of_test_examples) / batch_size)
-    print("The training steps is {}".format(train_steps))
     print("The testing steps is {}".format(test_steps))
 
     # set fixed random seed
     tf.set_random_seed(args.seed)
 
     # set directory path
-    model_dir = os.path.join(args.output_dir,
-                             'model_DLRM_' + str(int(time.time())))
+    model_dir = os.path.join(args.output_dir, 'model_DLRM_1733197099')
     checkpoint_dir = args.checkpoint if args.checkpoint else model_dir
     print("Saving model checkpoints to " + checkpoint_dir)
 
     # create data pipline of train & test dataset
-    train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
     test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
+    iterator = tf.data.Iterator.from_structure(test_dataset.output_types,
                                                test_dataset.output_shapes)
     next_element = iterator.get_next()
 
-    train_init_op = iterator.make_initializer(train_dataset)
     test_init_op = iterator.make_initializer(test_dataset)
 
     # create feature column
@@ -553,20 +481,11 @@ def main(tf_config=None, server=None):
 
     # Run model training and evaluation
     start_time = time.perf_counter()
-    train(sess_config, hooks, model, train_init_op, train_steps,
-          checkpoint_dir, tf_config, server)
-    end_time = time.perf_counter()
-    print("Train TimeCost =", end_time - start_time, "sec")
-    if not (args.no_eval or tf_config):
-        os.environ['INFERENCE_MODE'] = 'True'
-        eval(sess_config, hooks, model, test_init_op, test_steps,
+    os.environ['INFERENCE_MODE'] = 'True'
+    inference(sess_config, hooks, model, test_init_op, test_steps,
              checkpoint_dir)
-        eval_time = time.perf_counter()
-        print("Eval TimeCost =", eval_time - end_time, "sec")
-    os.makedirs(result_dir, exist_ok=True)
-    with open(result_path, 'w') as f:
-        f.write(str(global_time_cost)+'\n')
-        f.write(str(global_auc)+'\n')
+    infer_time = time.perf_counter()
+    print("Infer TimeCost =", infer_time - start_time, "sec")
 
 
 def boolean_string(string):

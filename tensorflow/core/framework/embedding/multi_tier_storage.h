@@ -154,18 +154,10 @@ class MultiTierStorage : public Storage<K, V> {
   void UpdateCache(const Tensor& indices,
                    const Tensor& indices_counts) override {
     cache_->update(indices, indices_counts);
-    // Schedule([this, indices, indices_counts]() {
-    // LOG(INFO) << "Enter -----> UpdateCache1";
-    //   cache_->update(indices, indices_counts);
-    // });
   }
 
   void UpdateCache(const Tensor& indices) override {
     cache_->update(indices);
-    LOG(INFO) << "Enter -----> UpdateCache2";
-    // Schedule([this, indices]() {
-    //   cache_->update(indices);
-    // });
   }
 
   virtual bool IsUseHbm() override {
@@ -173,19 +165,11 @@ class MultiTierStorage : public Storage<K, V> {
   }
 
   void AddToCachePrefetchList(const Tensor& indices) override {
-    // LOG(INFO) << "Enter -----> AddToCachePrefetchList";
     cache_->add_to_prefetch_list(indices);
-    // Schedule([this, indices]() {
-    //   cache_->add_to_prefetch_list(indices);
-    // });
   }
 
   void AddToCache(const Tensor& indices) override {
-    // LOG(INFO) << "Enter -----> AddToCache";
     cache_->add_to_cache(indices);
-    // Schedule([this, indices]() {
-    //   cache_->add_to_cache(indices);
-    // });
   }
 
   Status RestoreFeatures(int64 key_num, int bucket_num, int64 partition_id,
@@ -198,7 +182,7 @@ class MultiTierStorage : public Storage<K, V> {
                                partition_num, value_len, is_filter,
                                false/*to_dram*/, is_incr, restore_buff);
  
-    if (emb_config.is_primary() && cache_) {
+    if (cache_) {
       K* key_buff = (K*)restore_buff.key_buffer;
       V* value_buff = (V*)restore_buff.value_buffer;
       int64* version_buff = (int64*)restore_buff.version_buffer;
