@@ -423,7 +423,7 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
 def main(tf_config=None, server=None):
     # check dataset and count data set size
     print("Checking dataset...")
-    test_file = os.path.join(args.data_location, 'eval_b.csv')
+    test_file = os.path.join(args.data_location, 'eval.csv')
     if (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
@@ -439,9 +439,9 @@ def main(tf_config=None, server=None):
     tf.set_random_seed(args.seed)
 
     # set directory path
-    model_dir = os.path.join(args.output_dir, 'model_DLRM_1733197099')
+    model_dir = os.path.join(args.output_dir, os.listdir(args.output_dir)[0])
     checkpoint_dir = args.checkpoint if args.checkpoint else model_dir
-    print("Saving model checkpoints to " + checkpoint_dir)
+    print("Loading model checkpoints from " + checkpoint_dir)
 
     # create data pipline of train & test dataset
     test_dataset = build_model_input(test_file, batch_size, 1)
