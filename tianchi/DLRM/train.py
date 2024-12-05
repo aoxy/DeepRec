@@ -349,7 +349,7 @@ def build_feature_columns():
     if args.cache_cap > 0:
         storage_type_inst = config_pb2.StorageType.DRAM_SSDHASH
         storage_type_str = 'StorageType.DRAM_SSDHASH'
-    cache_cap_mb = args.cache_cap * 100 * (EMBEDDING_DIMENSIONS // 16)
+    cache_cap_mb = args.cache_cap * 100
     os.makedirs(args.emb_dir, exist_ok=True)
     storage_option = tf.StorageOption(storage_type=storage_type_inst,
                                   storage_path=args.emb_dir,

@@ -349,7 +349,7 @@ def build_feature_columns():
     if args.cache_cap > 0:
         storage_type_inst = config_pb2.StorageType.DRAM_SSDHASH
         storage_type_str = 'StorageType.DRAM_SSDHASH'
-    cache_cap_mb = args.cache_cap * 100 * (EMBEDDING_DIMENSIONS // 16)
+    cache_cap_mb = args.cache_cap * 100
     os.makedirs(args.emb_dir, exist_ok=True)
     storage_option = tf.StorageOption(storage_type=storage_type_inst,
                                   storage_path=args.emb_dir,
@@ -404,14 +404,17 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
         scaffold=scaffold, checkpoint_dir=checkpoint_dir, config=sess_config)
     writer = tf.summary.FileWriter(os.path.join(checkpoint_dir, 'eval'))
     merged = tf.summary.merge_all()
-
     with tf.train.MonitoredSession(session_creator=session_creator,
                                    hooks=hooks) as sess:
+        start_time = time.perf_counter()
         for _in in range(1, steps + 1):
             if (_in != steps):
                 sess.run([model.acc_op, model.auc_op])
                 if (_in % 100 == 0):
-                    print("Evaluation complate:[{}/{}]".format(_in, steps))
+                    end_time = time.perf_counter()
+                    costs = end_time - start_time
+                    print("Evaluation complate:[{}/{}] {} sec".format(_in, steps, costs))
+                    start_time = time.perf_counter()
             else:
                 eval_acc, eval_auc, events = sess.run(
                     [model.acc_op, model.auc_op, merged])
@@ -423,7 +426,7 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
 def main(tf_config=None, server=None):
     # check dataset and count data set size
     print("Checking dataset...")
-    test_file = os.path.join(args.data_location, 'eval.csv')
+    test_file = os.path.join(args.data_location, 'eval_1.csv')
     if (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()

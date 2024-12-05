@@ -52,6 +52,7 @@ class BlockLockLRUCache : public BatchCache<K> {
 
   ~BlockLockLRUCache() override {
     LOG(INFO) << "Evicted Size = " << evicted.size_lockless();
+    LOG(INFO) << "Cache Size = " << this->size();
   }
 
   size_t get_capacity() override { return capacity_; }

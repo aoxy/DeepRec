@@ -172,7 +172,7 @@ class MultiTierStorage : public Storage<K, V> {
     cache_->add_to_cache(indices);
   }
 
-  Status RestoreFeatures(int64 key_num, int bucket_num, int64 partition_id,
+  virtual Status RestoreFeatures(int64 key_num, int bucket_num, int64 partition_id,
                          int64 partition_num, int64 value_len, bool is_filter,
                          bool is_incr, const EmbeddingConfig& emb_config,
                          const Eigen::GpuDevice* device,

@@ -219,6 +219,23 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
     return Status::OK();
   }
 
+  Status RestoreFeatures(int64 key_num, int bucket_num, int64 partition_id,
+                         int64 partition_num, int64 value_len, bool is_filter,
+                         bool is_incr, const EmbeddingConfig& emb_config,
+                         const Eigen::GpuDevice* device,
+                         FilterPolicy<K, V, EmbeddingVar<K, V>>* filter,
+                         RestoreBuffer& restore_buff) override {
+    if (emb_config.is_primary()) {
+      mutex_lock l1(*(ssd_hash_->get_mutex()));
+      K* key_buff = (K*)restore_buff.key_buffer;
+      V* value_buff = (V*)restore_buff.value_buffer;
+      for (auto i = 0; i < key_num; ++i) {
+        ssd_hash_->Commit(key_buff[i], value_buff + i * value_len);
+      }
+    }
+    return Status::OK();
+  }
+
   void UpdateValuePtr(K key, void* new_value_ptr,
                       void* old_value_ptr) override {
     dram_->UpdateValuePtr(key, new_value_ptr, old_value_ptr);
