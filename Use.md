@@ -1,12 +1,35 @@
 ## 进入容器
 
-
 ```shell
-docker stop axynetp
-docker start axynetp
-docker exec -it axynetp /bin/bash
+sudo docker stop axynetp
+sudo docker start axynetp
+sudo docker exec -it axynetp /bin/bash
 cd /home/code/aoxy/DeepRec/
 cd /home/code/aoxy/DeepRec/tianchi/DLRM/
+bash test.sh &
+```
+
+## 限制容器资源
+
+```shell
+sudo docker update --memory "16g" --memory-swap "29g" axynetp
+sudo docker update --memory "13g" --memory-swap "16g" axynetp
+sudo docker update --memory "8g" --memory-swap "21g" axynetp
+sudo docker update --memory "160g" --memory-swap "280g" axynetp
+# 查看限制
+sudo docker inspect axynetp --format='{{.HostConfig.Memory}}'
+sudo docker inspect axynetp --format='{{.HostConfig.MemorySwap}}'
+```
+
+## 设置Swap
+
+```shell
+sudo swapon -s
+sudo swapoff -a
+sudo dd if=/dev/zero of=/home/axy/code/swapfile bs=1024 count=$((13 * 1024 * 1024))
+sudo chmod 600 /home/axy/code/swapfile
+sudo mkswap /home/axy/code/swapfile
+sudo swapon /home/axy/code/swapfile
 ```
 
 ## 模型测试
@@ -119,6 +142,7 @@ git config --global user.email "jerryao@mail.ustc.edu.cn"
 ```
 
 ## `reinstall_deeprc.sh`
+
 ```shell
 bazel build -c opt --config=opt //tensorflow/tools/pip_package:build_pip_package
 if [ $? -eq 0 ]; then

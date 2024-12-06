@@ -426,7 +426,7 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
 def main(tf_config=None, server=None):
     # check dataset and count data set size
     print("Checking dataset...")
-    test_file = os.path.join(args.data_location, 'eval_1.csv')
+    test_file = os.path.join(args.data_location, 'eval.csv')
     if (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
