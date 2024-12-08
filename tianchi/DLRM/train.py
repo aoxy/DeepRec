@@ -81,7 +81,13 @@ TYPE_COLS = ['time_type', 'time_type_list']
 TYPE_LIST = ['lunch', 'night', 'dinner', 'tea', 'breakfast']
 
 HASH_BUCKET_SIZES = 100000
-EMBEDDING_DIMENSIONS = 16 * 4 * 4
+EMBEDDING_DIMENSIONS = None
+
+StorageTypeDict = {
+    'DRAM': config_pb2.StorageType.DRAM,
+    'DRAM_SSDHASH': config_pb2.StorageType.DRAM_SSDHASH,
+    'DRAM_LEVELDB': config_pb2.StorageType.DRAM_LEVELDB,
+}
 
 
 class DLRM():
@@ -334,6 +340,7 @@ def build_model_input(filename, batch_size, num_epochs):
 def build_feature_columns():
     dense_column = []
     sparse_column = []
+    EMBEDDING_DIMENSIONS = args.emb_dim
     for columns in SHARE_EMBEDDING_COLS:
         cate_cols = []
         for col in columns:
@@ -344,26 +351,27 @@ def build_feature_columns():
             cate_cols, EMBEDDING_DIMENSIONS)
         sparse_column.extend(shared_emb_cols)
 
-    storage_type_inst = config_pb2.StorageType.DRAM
-    storage_type_str = 'StorageType.DRAM'
-    if args.cache_cap > 0:
-        storage_type_inst = config_pb2.StorageType.DRAM_SSDHASH
-        storage_type_str = 'StorageType.DRAM_SSDHASH'
-    cache_cap_mb = args.cache_cap * 100
     os.makedirs(args.emb_dir, exist_ok=True)
-    storage_option = tf.StorageOption(storage_type=storage_type_inst,
-                                  storage_path=args.emb_dir,
-                                  storage_size=[1024 * 1024 * cache_cap_mb],
-                                  cache_strategy = config_pb2.CacheStrategy.B32LFU)
-                                  
-    ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
 
     for column in EMBEDDING_COLS:
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
-
-        if column == "timediff_list" and args.cache_cap >= 0:
-            tf.logging.info('Use {}, Cache Capacity {}MB'.format(storage_type_str , cache_cap_mb))
+        use_ev = True
+        if len(args.cache_cap) == 1 and column == 'timediff_list':
+            cache_cap_mb = int(args.cache_cap[0]) * 100
+        elif len(args.cache_cap) == 2 and column == 'timediff_list':
+            cache_cap_mb = int(args.cache_cap[0]) * 100
+        elif len(args.cache_cap) == 2 and column == 'user_id':
+            cache_cap_mb = int(args.cache_cap[1]) * 100
+        else:
+            use_ev = False
+        if use_ev:
+            storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                                        storage_path=args.emb_dir,
+                                        storage_size=[1024 * 1024 * cache_cap_mb],
+                                        cache_strategy = config_pb2.CacheStrategy.B32LFU)
+            ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
+            tf.logging.info(f'[Feature {column}] Use {args.storage_type}, Cache Capacity {cache_cap_mb}MB')
             cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
 
         if args.tf or not args.emb_fusion:
@@ -661,9 +669,18 @@ def get_arg_parser():
                         required=False,
                         default='./temp_emb')
     parser.add_argument('--cache_cap',
-                        help='Cache Capacity(x100MB).',
+                        help='Cache Capacities (x100MB). Provide multiple values as a list.',
                         type=int,
-                        default=5)
+                        nargs='+',
+                        default=[11])
+    parser.add_argument('--storage_type',
+                        type=str,
+                        choices=['DRAM', 'DRAM_SSDHASH', 'DRAM_LEVELDB'],
+                        default='DRAM')
+    parser.add_argument('--emb_dim',
+                        help='Embedding dimension',
+                        type=int,
+                        default=256)
     return parser
 
 
