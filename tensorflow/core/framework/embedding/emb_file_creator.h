@@ -33,34 +33,38 @@ enum class IoScheme {
 class EmbFileCreator {
  public:
   virtual EmbFile* Create(const std::string& path,
-                          const size_t version,
-                          const size_t buffer_size) = 0;
+                          const uint32 version,
+                          const uint32 buffer_size,
+                          const uint32 val_len_) = 0;
 };
 
 class MmapAndMadviseEmbFileCreator : public EmbFileCreator {
  public:
   EmbFile* Create(const std::string& path,
-                  const size_t version,
-                  const size_t buffer_size) override {
-    return new MmapMadviseEmbFile(path, version, buffer_size);
+                  const uint32 version,
+                  const uint32 buffer_size,
+                  const uint32 val_len_) override {
+    return new MmapMadviseEmbFile(path, version, buffer_size, val_len_);
   }
 };
 
 class MmapEmbFileCreator : public EmbFileCreator {
  public:
   EmbFile* Create(const std::string& path,
-                  const size_t version,
-                  const size_t buffer_size) override {
-    return new MmapEmbFile(path, version, buffer_size);
+                  const uint32 version,
+                  const uint32 buffer_size,
+                  const uint32 val_len_) override {
+    return new MmapEmbFile(path, version, buffer_size, val_len_);
   }
 };
 
 class DirectIoEmbFileCreator : public EmbFileCreator {
  public:
   EmbFile* Create(const std::string& path,
-                  const size_t version,
-                  const size_t buffer_size) override {
-    return new DirectIoEmbFile(path, version, buffer_size);
+                  const uint32 version,
+                  const uint32 buffer_size,
+                  const uint32 val_len_) override {
+    return new DirectIoEmbFile(path, version, buffer_size, val_len_);
   }
 };
 

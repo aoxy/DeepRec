@@ -65,7 +65,7 @@ class EvictionManager {
   }
 
   void DeleteStorage(MultiTierStorage<K,V>* storage) {
-    // mutex_lock l(mu_);
+    mutex_lock l(mu_);
     // LOG(INFO) << "DeleteStorage ----> " << storage << "----" << storage_table_.size();
     auto storage_item = storage_table_[storage];
     bool delete_flag = false;

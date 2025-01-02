@@ -34,9 +34,12 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
         MultiTierStorage<K, V>(sc, name) {
     dram_ = new DramStorage<K, V>(sc, feat_desc);
     leveldb_ = new LevelDBStore<K, V>(sc, feat_desc);
+    max_dram_size_ = 0;
   }
 
   ~DramLevelDBStore() override {
+    LOG(INFO) << "DRAM Max Size = " << max_dram_size_;
+    LOG(INFO) << "DRAM Size = " << dram_->Size();
     MultiTierStorage<K, V>::DeleteFromEvictionManager();
     delete dram_;
     delete leveldb_;
@@ -93,19 +96,11 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
     dram_->CreateAndInsert(key, value_ptr);
     return Status::OK();
   }
- 
+
   Status Remove(K key) override {
     dram_->Remove(key);
     leveldb_->Remove(key);
     return Status::OK();
-  }
-
-  bool IsUseHbm() override {
-    return false;
-  }
-
-  bool IsSingleHbm() override {
-    return false;
   }
 
   int64 Size() const override {
@@ -132,6 +127,14 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
     if (s.ok())
       return 1;
     return -1;
+  }
+
+  bool IsUseHbm() override {
+    return false;
+  }
+
+  bool IsSingleHbm() override {
+    return false;
   }
 
   Status Save(
@@ -197,7 +200,13 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
   }
 
   Status Eviction(K* evict_ids, int64 evict_size) override {
-    void* value_ptr;
+    if (evict_size <= 0) {
+      return Status::OK();
+    }
+    max_dram_size_ = std::max(max_dram_size_, (size_t)dram_->Size());
+    mutex_lock dram_l(*(dram_->get_mutex()));
+    mutex_lock leveldb_l(*(leveldb_->get_mutex()));
+    void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
         TF_CHECK_OK(leveldb_->Commit(evict_ids[i], value_ptr));
@@ -209,8 +218,12 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
   }
 
   Status EvictionWithDelayedDestroy(K* evict_ids, int64 evict_size) override {
-    mutex_lock l(*(dram_->get_mutex()));
-    mutex_lock l1(*(leveldb_->get_mutex()));
+    if (evict_size <= 0) {
+      return Status::OK();
+    }
+    max_dram_size_ = std::max(max_dram_size_, (size_t)dram_->Size());
+    mutex_lock dram_l(*(dram_->get_mutex()));
+    mutex_lock leveldb_l(*(leveldb_->get_mutex()));
     MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->feature_descriptor());
     void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
@@ -238,9 +251,10 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
   }
 
  private:
-  DramStorage<K, V>* dram_;
-  LevelDBStore<K, V>* leveldb_;
+  DramStorage<K, V>* dram_ = nullptr;;
+  LevelDBStore<K, V>* leveldb_ = nullptr;
   FeatureDescriptor<V>* dram_feat_desc_ = nullptr;
+  size_t max_dram_size_;
 };
 } // embedding
 } // tensorflow

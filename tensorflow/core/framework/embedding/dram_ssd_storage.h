@@ -32,7 +32,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
       FeatureDescriptor<V>* feat_desc, const std::string& name)
       : dram_feat_desc_(feat_desc),
         MultiTierStorage<K, V>(sc, name) {
-    dram_= new DramStorage<K, V>(sc, feat_desc);
+    dram_ = new DramStorage<K, V>(sc, feat_desc);
     ssd_hash_ = new SsdHashStorage<K, V>(sc, feat_desc);
     max_dram_size_ = 0;
   }
@@ -53,7 +53,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
       return s;
     }
     s = ssd_hash_->Get(key, value_ptr);
-    if(s.ok()) {
+    if (s.ok()) {
       s = dram_->TryInsert(key, *value_ptr);
       if (s.ok()) {
         return s;
@@ -86,7 +86,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
       return s;
     }
     s = ssd_hash_->Get(key, value_ptr);
-    if(s.ok()) {
+    if (s.ok()) {
       s = dram_->TryInsert(key, *value_ptr);
       if (s.ok()) {
         return s;
@@ -187,8 +187,8 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
       return Status::OK();
     }
     max_dram_size_ = std::max(max_dram_size_, (size_t)dram_->Size());
-    mutex_lock l(*(dram_->get_mutex()));
-    mutex_lock l1(*(ssd_hash_->get_mutex()));
+    mutex_lock dram_l(*(dram_->get_mutex()));
+    mutex_lock ssd_hash_l(*(ssd_hash_->get_mutex()));
     void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
       if (dram_->Get(evict_ids[i], &value_ptr).ok()) {
@@ -205,8 +205,8 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
       return Status::OK();
     }
     max_dram_size_ = std::max(max_dram_size_, (size_t)dram_->Size());
-    mutex_lock l(*(dram_->get_mutex()));
-    mutex_lock l1(*(ssd_hash_->get_mutex()));
+    mutex_lock dram_l(*(dram_->get_mutex()));
+    mutex_lock ssd_hash_l(*(ssd_hash_->get_mutex()));
     MultiTierStorage<K, V>::ReleaseInvalidValuePtr(dram_->feature_descriptor());
     void* value_ptr = nullptr;
     for (int64 i = 0; i < evict_size; ++i) {
@@ -258,7 +258,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
  private:
   DramStorage<K, V>* dram_ = nullptr;
   SsdHashStorage<K, V>* ssd_hash_ = nullptr;
-  FeatureDescriptor<V>* dram_feat_desc_;
+  FeatureDescriptor<V>* dram_feat_desc_ = nullptr;
   size_t max_dram_size_;
 };
 } // embedding

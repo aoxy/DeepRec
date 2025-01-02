@@ -89,7 +89,7 @@ class SsdRecordDescriptor {
     for (int64 i = 0; i < file_list.size(); i++) {
       int64 file_id = file_list[i];
       std::stringstream old_ss;
-      old_ss << std::setw(4) << std::setfill('0') << file_id << ".emb";
+      old_ss << std::setw(6) << std::setfill('0') << file_id << ".emb";
       std::string file_path = file_prefix + old_ss.str();
       std::string file_name = file_path.substr(file_path.rfind("/"));
       std::stringstream new_ss;

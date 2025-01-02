@@ -480,9 +480,9 @@ class SSDHashKV : public KVInterface<K, V> {
       }
       delete emb_files_[version];
       emb_files_[version] =
-          emb_file_creator_->Create(path_, version, BUFFER_SIZE);
+          emb_file_creator_->Create(path_, version, BUFFER_SIZE, val_len_);
     } else {
-      EmbFile* f = emb_file_creator_->Create(path_, version, BUFFER_SIZE);
+      EmbFile* f = emb_file_creator_->Create(path_, version, BUFFER_SIZE, val_len_);
       emb_files_.emplace_back(f);
     }
   }
