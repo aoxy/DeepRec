@@ -22,6 +22,7 @@ import sys
 import math
 import collections
 import json
+import re
 
 from tensorflow.python.feature_column import utils as fc_utils
 from tensorflow.python.feature_column import feature_column_v2
@@ -450,7 +451,8 @@ def main(tf_config=None, server=None):
     tf.set_random_seed(args.seed)
 
     # set directory path
-    model_dir = os.path.join(args.output_dir, os.listdir(args.output_dir)[0])
+    checkpoints = [s for s in os.listdir(args.output_dir) if re.match(r"model_DLRM_\d+", s)]
+    model_dir = os.path.join(args.output_dir, checkpoints[0])
     checkpoint_dir = args.checkpoint if args.checkpoint else model_dir
     print("Loading model checkpoints from " + checkpoint_dir)
 
@@ -606,7 +608,7 @@ def get_arg_parser():
     parser.add_argument('--emb_dim',
                         help='Embedding dimension',
                         type=int,
-                        default=256)
+                        default=128)
     return parser
 
 

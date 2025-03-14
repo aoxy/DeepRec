@@ -680,7 +680,7 @@ def get_arg_parser():
     parser.add_argument('--emb_dim',
                         help='Embedding dimension',
                         type=int,
-                        default=256)
+                        default=128)
     return parser
 
 
