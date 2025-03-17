@@ -443,7 +443,8 @@ def _set_checkpoint_initializer(variable,
       is_partitioned_ev = variable._save_slice_info is not None
       partition_id = variable._save_slice_info.var_offset[0] if is_partitioned_ev else 0
       partition_num = variable._save_slice_info.full_shape[0] if is_partitioned_ev else 1
-      with ops.control_dependencies([variable._initializer_op]):
+      restore_dependency = ops.get_collection(ops.GraphKeys.EMBEDDING_VARIABLE_RESTORE_DEPENDENCY)[0]
+      with ops.control_dependencies(restore_dependency[variable._primary_handle]):
         rank = variable.initial_value.get_shape().rank - 1
         restore_op = gen_kv_variable_ops.kv_resource_import_v3(
             ckpt_file,
