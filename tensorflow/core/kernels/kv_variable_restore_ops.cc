@@ -25,6 +25,7 @@ limitations under the License.
 #include "tensorflow/core/framework/embedding/cache.h"
 #include "tensorflow/core/framework/embedding/config.pb.h"
 #include "tensorflow/core/framework/embedding/embedding_var.h"
+#include "tensorflow/core/framework/embedding/storage_factory.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/resource_mgr.h"
@@ -372,6 +373,12 @@ class KvResourceImportV3Op: public AsyncOpKernel {
     OP_REQUIRES_OK(context, LookupResource(context, HandleFromInput(context, 1), &ev));
 
     core::ScopedUnref unref_me(ev);
+
+    // EV should not be initialized at this time.
+    if (ev->IsInitialized()) {
+      LOG(ERROR) << "Import parameter for EV (" << name_string
+                 << ") failed, this EV has already been initialized.";
+    }
 
     auto do_compute = [this, context, file_name_string, ev,
          name_string, done] () {
