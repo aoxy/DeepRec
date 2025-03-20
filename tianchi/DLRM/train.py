@@ -89,6 +89,28 @@ StorageTypeDict = {
     'DRAM_LEVELDB': config_pb2.StorageType.DRAM_LEVELDB,
 }
 
+ProfilingStrategyDict = {
+    'NONE': config_pb2.ProfilingStrategy.NONE,
+    'AET': config_pb2.ProfilingStrategy.AET,
+}
+
+CacheStrategyDict = {
+    'LRU': config_pb2.CacheStrategy.LRU,
+    'LFU': config_pb2.CacheStrategy.LFU,
+    'B16LRU': config_pb2.CacheStrategy.B16LRU,
+    'B16LFU': config_pb2.CacheStrategy.B16LFU,
+    'B32LRU': config_pb2.CacheStrategy.B32LRU,
+    'B32LFU': config_pb2.CacheStrategy.B32LFU,
+    'B48LRU': config_pb2.CacheStrategy.B48LRU,
+    'B48LFU': config_pb2.CacheStrategy.B48LFU,
+}
+
+CACHE_SIZES = {
+    "user_id": 2443264,
+    "times": 133120,
+    "district_id": 3413,
+    "timediff_list": 8605013
+}
 
 class DLRM():
 
@@ -353,26 +375,27 @@ def build_feature_columns():
 
     os.makedirs(args.emb_dir, exist_ok=True)
 
-    for column in EMBEDDING_COLS:
+    if len(args.cache_sizes) == 1:
+        cache_sizes_list = [int(args.cache_sizes[0]) for _ in EMBEDDING_COLS]
+    elif len(args.cache_sizes) == len(EMBEDDING_COLS):
+        cache_sizes_list = [int(x) for x in args.cache_sizes]
+    else:
+        print("Invalid cache_sizes:", args.cache_sizes)
+        exit(-1)
+
+    for column, cache_size in zip(EMBEDDING_COLS, cache_sizes_list):
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
-        use_ev = True
-        if len(args.cache_cap) == 1 and column == 'timediff_list':
-            cache_cap_mb = int(args.cache_cap[0]) * 100
-        elif len(args.cache_cap) == 2 and column == 'timediff_list':
-            cache_cap_mb = int(args.cache_cap[0]) * 100
-        elif len(args.cache_cap) == 2 and column == 'user_id':
-            cache_cap_mb = int(args.cache_cap[1]) * 100
-        else:
-            use_ev = False
-        if use_ev:
-            storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
-                                        storage_path=args.emb_dir,
-                                        storage_size=[1024 * 1024 * cache_cap_mb],
-                                        cache_strategy = config_pb2.CacheStrategy.B32LFU)
-            ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
-            tf.logging.info(f'[Feature {column}] Use {args.storage_type}, Cache Capacity {cache_cap_mb}MB')
-            cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
+        
+        storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                                    storage_path=f"{args.emb_dir}/{column}",
+                                    storage_size=[1024 * 1024 * cache_size],
+                                    cache_strategy = CacheStrategyDict[args.cache_strategy],
+                                    profiling_strategy = ProfilingStrategyDict[args.profiling])
+
+        ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
+        tf.logging.info(f'[Feature {column}] Use {args.storage_type}, {args.cache_strategy}, {args.profiling}, Cache Capacity {cache_size}MB')
+        cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
 
         if args.tf or not args.emb_fusion:
             emb_col = tf.feature_column.embedding_column(
@@ -489,8 +512,12 @@ def main(tf_config=None, server=None):
     if (not os.path.exists(train_file)) or (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_training_examples = sum(1 for line in open(train_file))
-    no_of_test_examples = sum(1 for line in open(test_file))
+    no_of_training_examples = 2170299#sum(1 for line in open(train_file))
+    no_of_test_examples = 600000#sum(1 for line in open(test_file))
+    print("no_of_training_examples =", no_of_training_examples)
+    print("no_of_test_examples =", no_of_test_examples)
+    # no_of_training_examples = 2170299
+    # no_of_test_examples = 600000
 
     # set batch size, eporch & steps
     batch_size = args.batch_size
@@ -533,16 +560,12 @@ def main(tf_config=None, server=None):
     # Session config
     sess_config = tf.ConfigProto()
 
-    # https://zhuanlan.zhihu.com/p/33086252
-    print("intra_op_parallelism_threads =", sess_config.intra_op_parallelism_threads)
-    print("inter_op_parallelism_threads =", sess_config.inter_op_parallelism_threads)
-
     # Session hooks
     hooks = []
 
     if args.smartstaged and not args.tf:
         '''Smart staged Feature'''
-        next_element = tf.staged(next_element, num_threads=4, capacity=10)
+        next_element = tf.staged(next_element, num_threads=4, capacity=40)
         sess_config.graph_options.optimizer_options.do_smart_stage = True
         hooks.append(tf.make_prefetch_hook())
     if args.op_fusion and not args.tf:
@@ -668,11 +691,6 @@ def get_arg_parser():
                         help='Full path to store embeddings on SSD',
                         required=False,
                         default='./temp_emb')
-    parser.add_argument('--cache_cap',
-                        help='Cache Capacities (x100MB). Provide multiple values as a list.',
-                        type=int,
-                        nargs='+',
-                        default=[11])
     parser.add_argument('--storage_type',
                         type=str,
                         choices=['DRAM', 'DRAM_SSDHASH', 'DRAM_LEVELDB'],
@@ -681,7 +699,23 @@ def get_arg_parser():
                         help='Embedding dimension',
                         type=int,
                         default=128)
+    parser.add_argument('--profiling',
+                        help='',
+                        type=str,
+                        choices=['NONE', 'AET'],
+                        default='NONE')
+    parser.add_argument('--cache_strategy',
+                        help='',
+                        type=str,
+                        choices=['LRU', 'LFU', 'B16LRU', 'B16LFU', 'B32LRU', 'B32LFU', 'B48LRU', 'B48LFU'],
+                        default='B32LFU')
+    parser.add_argument('--cache_sizes',
+                        help='Cache Capacities (MB). Provide multiple values as a list.',
+                        type=int,
+                        nargs='+',
+                        default=[256])
     return parser
+
 
 
 # Parse distributed training configuration and generate cluster information
@@ -765,7 +799,10 @@ def set_env_for_DeepRec():
     os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
     os.environ['TF_SSDHASH_IO_SCHEME'] = 'directio' # directio, mmap_and_madvise
     os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
-    # os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
+    os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
+    os.environ['TF_NUM_INTEROP_THREADS'] = '8'
+    os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
+    os.environ['CACHE_TUNING_STRATEGY'] = 'min_mc_local_greedy' # min_mc_local_greedy min_mc_random_greedy
 
 
 if __name__ == '__main__':

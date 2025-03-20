@@ -2,7 +2,8 @@ bazel build -c opt --config=opt //tensorflow/tools/pip_package:build_pip_package
 if [ $? -eq 0 ]; then
     rm -rf /tmp/tensorflow_pkg
     ./bazel-bin/tensorflow/tools/pip_package/build_pip_package /tmp/tensorflow_pkg
-    pip3 install --upgrade --force-reinstall --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple /tmp/tensorflow_pkg/tensorflow-1.15.5+deeprec2306-cp38-cp38-linux_x86_64.whl
-    pip3 uninstall protobuf -y
-    pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple protobuf==3.19.0
+    pip3 install --no-deps --force-reinstall /tmp/tensorflow_pkg/tensorflow-1.15.5+deeprec2402-cp38-cp38-linux_x86_64.whl
+    # pip3 install --upgrade --force-reinstall --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple /tmp/tensorflow_pkg/tensorflow-1.15.5+deeprec2402-cp38-cp38-linux_x86_64.whl
+    # pip3 uninstall protobuf -y
+    # pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple protobuf==3.19.0
 fi

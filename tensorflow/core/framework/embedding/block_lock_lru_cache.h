@@ -26,8 +26,9 @@ static thread_local int thread_idx = -1;
 template <class K>
 class BlockLockLRUCache : public BatchCache<K> {
  public:
-  BlockLockLRUCache(size_t capacity, size_t way, int num_threads = 8)
-      : evic_idx_(0),
+  BlockLockLRUCache(const std::string& name, size_t capacity, size_t way, int num_threads = 8)
+      : name_(name),
+        evic_idx_(0),
         num_threads_(num_threads),
         way_(way),
         thread_count_idx(0),
@@ -48,11 +49,17 @@ class BlockLockLRUCache : public BatchCache<K> {
     evicted.set_empty_key_and_value(EMPTY_CACHE_KEY, -1);
     evicted.set_counternum(16);
     evicted.set_deleted_key(DELETED_CACHE_KEY);
+    LOG(INFO) << "BlockLockLRUCache Init: capacity = " << capacity << ", way = " << way << ", Name = " << name_;
   }
 
+  // BlockLockLRUCache(BlockLockLRUCache&&) = delete;
+  
+  // BlockLockLRUCache& operator=(BlockLockLRUCache&&) = delete;
+
   ~BlockLockLRUCache() override {
-    LOG(INFO) << "Evicted Size = " << evicted.size_lockless();
-    LOG(INFO) << "Cache Size = " << this->size();
+    LOG(INFO) << "~~BLRU Evicted Size = " << evicted.size_lockless()
+              << ", Cache Size = " << this->size()
+              << ", Name = " << name_;
   }
 
   size_t get_capacity() override { return capacity_; }
@@ -182,6 +189,7 @@ class BlockLockLRUCache : public BatchCache<K> {
     CacheBlock& operator=(CacheBlock&) = delete;
   };
 
+  std::string name_;
   std::vector<CacheBlock*> cache_;
   typedef google::dense_hash_set_lockless<K> LocklessHashSet;
   LocklessHashSet evicted;

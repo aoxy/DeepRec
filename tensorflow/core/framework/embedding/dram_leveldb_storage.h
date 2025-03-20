@@ -246,7 +246,7 @@ class DramLevelDBStore : public MultiTierStorage<K, V> {
     return dram_feat_desc_->total_dim();
   }
 
-  int data_bytes() override {
+  int data_bytes() const override {
     return dram_feat_desc_->data_bytes();
   }
 

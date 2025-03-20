@@ -31,8 +31,9 @@ static thread_local int sync_idx = -1;
 template <class K>
 class BlockLockLFUCache : public BatchCache<K> {
  public:
-  BlockLockLFUCache(size_t capacity, size_t way, int num_threads = 8)
-      : evic_idx_(0),
+  BlockLockLFUCache(const std::string& name, size_t capacity, size_t way, int num_threads = 8)
+      : name_(name),
+        evic_idx_(0),
         num_threads_(num_threads),
         way_(way),
         sync_idx_count(0),
@@ -52,11 +53,17 @@ class BlockLockLFUCache : public BatchCache<K> {
     evicted.set_empty_key_and_value(EMPTY_CACHE_KEY, -1);
     evicted.set_counternum(16);
     evicted.set_deleted_key(DELETED_CACHE_KEY);
+    LOG(INFO) << "BlockLockLFUCache Init: capacity = " << capacity << ", way = " << way << ", Name = " << name_;
   }
 
+  // BlockLockLFUCache(BlockLockLFUCache&&) = delete;
+  
+  // BlockLockLFUCache& operator=(BlockLockLFUCache&&) = delete;
+
   ~BlockLockLFUCache() override {
-    LOG(INFO) << "BLFU Evicted Size = " << evicted.size_lockless();
-    LOG(INFO) << "Cache Size = " << this->size();
+    LOG(INFO) << "~~BLFU Evicted Size = " << evicted.size_lockless()
+              << ", Cache Size = " << this->size()
+              << ", Name = " << name_;
   }
 
   size_t get_capacity() override { return capacity_; }
@@ -374,6 +381,7 @@ class BlockLockLFUCache : public BatchCache<K> {
     CacheBlock& operator=(CacheBlock&) = delete;
   };
 
+  std::string name_;
   std::unordered_map<K, PrefetchLFUNode<K>*> prefetch_id_table;
   std::vector<CacheBlock*> cache_;
   typedef google::dense_hash_set_lockless<K> LocklessHashSet;

@@ -27,6 +27,7 @@ limitations under the License.
 #include "tensorflow/core/framework/embedding/l2weight_shrink_policy.h"
 #include "tensorflow/core/framework/embedding/storage_config.h"
 #include "tensorflow/core/framework/embedding/storage.h"
+#include "tensorflow/core/framework/embedding/cache_profiler.h"
 
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/core/status.h"
@@ -44,7 +45,7 @@ struct SsdRecordDescriptor;
 
 namespace embedding {
 template<typename K, typename V>
-class MultiTierStorage : public Storage<K, V> {
+class MultiTierStorage : public Storage<K, V>, public TunableCache {
  public:
   MultiTierStorage(const StorageConfig& sc, const std::string& name)
       : Storage<K, V>(sc), name_(name) {}
@@ -59,7 +60,24 @@ class MultiTierStorage : public Storage<K, V> {
   virtual void Init() override {
     cache_capacity_ = Storage<K, V>::storage_config_.size[0] / data_bytes();
     VLOG(0) << "[MultiTierStorage] cache_capacity_ = " << cache_capacity_;
+    if (cache_) {
+      cache_->set_capacity(cache_capacity_);
+    } else {
+      LOG(INFO) << "Init: Cache \"" << name_ << "\" not initialized";
+    }
     ready_eviction_ = true;
+    LOG(INFO) << "Init: Setting \"" << name_ << "\" cache capacity to " << cache_capacity_ << ", unit size=" << data_bytes();
+  }
+
+  void EvictAll() override {
+    BatchCache<K>* cache = this->Cache();
+    const size_t k_size = cache->size();
+    K evic_ids[k_size];
+    if (!MultiTierStorage<K, V>::ready_eviction_){
+      return;
+    }
+    size_t true_size = cache->get_evic_ids(evic_ids, k_size);
+    EvictionWithDelayedDestroy(evic_ids, true_size);
   }
 
   int64 CacheCapacity() const override {
@@ -70,13 +88,47 @@ class MultiTierStorage : public Storage<K, V> {
     return cache_;
   }
 
-  void InitCache(embedding::CacheStrategy cache_strategy, int num_threads) override {
+  size_t GetCacheSize() const override {
+    return Storage<K, V>::storage_config_.size[0];
+  }
+
+  void SetCacheSize(size_t new_size) override {
+    while (Storage<K, V>::flag_.test_and_set(std::memory_order_acquire));
+    Storage<K, V>::storage_config_.size[0] = new_size;
+    const size_t unit_size = sizeof(V) * total_dim();
+    cache_capacity_ = Storage<K, V>::storage_config_.size[0] / data_bytes();
+    if (cache_) {
+      cache_->set_capacity(cache_capacity_);
+    } else {
+      LOG(INFO) << "SetCacheSize: Cache \"" << name_ << "\" not initialized";
+    }
+    ready_eviction_ = true;
+    Storage<K, V>::flag_.clear(std::memory_order_release);
+    LOG(INFO) << "SetCacheSize: Setting \"" << name_ << "\" cache capacity to " << cache_capacity_ << ", unit size=" << unit_size;
+  }
+
+  size_t GetCacheEntrySize() const override {
+    return data_bytes();
+  }
+
+  void InitCache(embedding::CacheStrategy cache_strategy, ProfilingStrategy profiling_strategy, int num_threads) override {
     if (cache_ == nullptr) {
-      cache_ = CacheFactory::Create<K>(cache_strategy, name_, cache_capacity_, num_threads);
+      cache_ = CacheFactory::Create<K>(cache_strategy, profiling_strategy, name_, cache_capacity_, num_threads, this);
+      // if (cache_capacity_ != -1) {
+        cache_->set_capacity(cache_capacity_);
+      // }
       eviction_manager_ = EvictionManagerCreator::Create<K, V>();
       eviction_manager_->AddStorage(this);
       cache_thread_pool_ = CacheThreadPoolCreator::Create();
     }
+  }
+
+  double GetHitRate() const override {
+    return cache_->GetHitRate();
+  }
+
+  void ResetStat() override {
+    cache_->reset_status();
   }
 
   Status BatchCommit(const std::vector<K>& keys,
@@ -144,11 +196,16 @@ class MultiTierStorage : public Storage<K, V> {
       return;
     int cache_count = cache_->size();
     cache_capacity_ = cache_->get_capacity();
-    int k_size = cache_count - cache_capacity_;
-    if (k_size > MinEvictionSize) {
-      k_size = std::min(k_size, EvictionSize);
-      size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
-      EvictionWithDelayedDestroy(evic_ids, true_size);
+    while (cache_count > cache_capacity_) {
+      int k_size = cache_count - cache_capacity_;
+      if (k_size > MinEvictionSize) {
+        LOG(INFO) << "Cache \"" << name_ << "\" is evicting " << k_size << " items";
+        k_size = std::min(k_size, EvictionSize);
+        size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
+        EvictionWithDelayedDestroy(evic_ids, true_size);
+      }
+      cache_count = cache_->size();
+      cache_capacity_ = cache_->get_capacity();
     }
   }
 
@@ -172,6 +229,12 @@ class MultiTierStorage : public Storage<K, V> {
   void AddToCache(const Tensor& indices) override {
     cache_->add_to_cache(indices);
   }
+
+  std::pair<uint64, uint64> GetMoveCount() const {
+    return {0, 0};
+  }
+
+  void ResetMoveCount() {}
 
   virtual Status RestoreFeatures(int64 key_num, int bucket_num, int64 partition_id,
                          int64 partition_num, int64 value_len, bool is_filter,
@@ -203,7 +266,7 @@ class MultiTierStorage : public Storage<K, V> {
   }
   virtual int total_dim() = 0;
 
-  virtual int data_bytes() = 0;
+  virtual int data_bytes() const = 0;
 
   void DeleteFromEvictionManager() {
     eviction_manager_->DeleteStorage(this);

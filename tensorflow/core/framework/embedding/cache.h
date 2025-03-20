@@ -1,9 +1,17 @@
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_CACHE_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_CACHE_H_
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <climits>
+#include <cstddef>
+#include <exception>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <list>
 #include <map>
+#include <memory>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -67,18 +75,25 @@ class BatchCache {
     }
     return total_size;
   }
-  virtual size_t get_capacity() = 0;
-  virtual void set_capacity(size_t new_capacity) = 0;
+  virtual size_t get_capacity() {
+    return desired_size;
+  }
+  virtual void set_capacity(size_t new_capacity) {
+    desired_size = new_capacity;
+  };
+  virtual void SetSize(size_t new_size) {
+    desired_size = new_size;
+  }
   virtual void reset_status() {
     for (SizeDataBlock& sdb : size_data_) {
       sdb.reset();
     }
   }
-  virtual float hit_rate() {
+  float hit_rate() {
     float hit_rate = 0.0;
     size_t total_num_hit = 0;
     size_t total_num_access = 0;
-    for (SizeDataBlock& sdb : size_data_) {
+    for (const SizeDataBlock& sdb : size_data_) {
       total_num_hit += sdb.num_hit_;
       total_num_access += sdb.num_miss_;
     }
@@ -88,11 +103,12 @@ class BatchCache {
     }
     return hit_rate;
   }
+  
   std::string DebugString() {
     float hit_rate = 0.0;
     size_t total_num_hit = 0;
     size_t total_num_access = 0;
-    for (SizeDataBlock& sdb : size_data_) {
+    for (const SizeDataBlock& sdb : size_data_) {
       total_num_hit += sdb.num_hit_;
       total_num_access += sdb.num_miss_;
     }
@@ -115,8 +131,24 @@ class BatchCache {
     }
   }
 
+  double GetHitRate() const {
+    double hit_rate = 0.0;
+    size_t total_num_hit = 0;
+    size_t total_num_access = 0;
+    for (const SizeDataBlock& sdb : size_data_) {
+      total_num_hit += sdb.num_hit_;
+      total_num_access += sdb.num_miss_;
+    }
+    total_num_access += total_num_hit;
+    if (total_num_access > 0) {
+      hit_rate = (double)total_num_hit / total_num_access;
+    }
+    return hit_rate;
+  }
+
  protected:
   std::vector<SizeDataBlock> size_data_;
+  size_t desired_size = 0;
 };
 
 template <class K>
@@ -164,36 +196,88 @@ class PrefetchLFUNode : public PrefetchNode<K> {
 template <class K>
 class LRUCache : public BatchCache<K> {
  public:
-  LRUCache(size_t capacity) : capacity_(capacity) {
+  LRUCache(const std::string& name, size_t capacity = 0, size_t way = 0, int num_threads = 8) : name_(name), access_(0) {
     mp.clear();
     head = new LRUNode(0);
     tail = new LRUNode(0);
     head->next = tail;
     tail->pre = head;
     BatchCache<K>::size_data_.resize(1);
+    #if STRICT_LRU
+    evicted_head = new LRUNode(0);
+    evicted_tail = new LRUNode(0);
+    evicted_head->next = evicted_tail;
+    evicted_tail->pre = evicted_head;
+    pending_evict_count = 0;
+    #endif
+    ReadInt64FromEnvVar("CACHE_REPORT_INTERVAL", 10000, &report_interval_);
+    base_time = 0;
+  }
+
+  explicit LRUCache(LRUCache<K>&& rhs):
+            name_(std::move(rhs.name_)),
+            access_(rhs.access_.load(std::memory_order_relaxed)),
+            mp(std::move(rhs.mp)),
+            prefetch_id_table(std::move(rhs.prefetch_id_table)),
+            head(rhs.head),
+            tail(rhs.tail),
+            report_interval_(rhs.report_interval_),
+            base_time(rhs.base_time) {
+    rhs.head = nullptr;
+    rhs.tail = nullptr;
+    #if STRICT_LRU
+    evicted_head = rhs.evicted_head;
+    rhs.evicted_head = nullptr;
+    evicted_tail = rhs.evicted_tail;
+    rhs.evicted_tail = nullptr;
+    pending_evict_count = rhs.pending_evict_count;
+    #endif
+    BatchCache<K>::size_data_[0].num_hit_ = rhs.size_data_[0].num_hit_;
+    BatchCache<K>::size_data_[0].num_miss_ = rhs.size_data_[0].num_miss_;
   }
 
   size_t size() override {
     mutex_lock l(mu_);
+    #if STRICT_LRU
+    return mp.size() + pending_evict_count;
+    #else
     return mp.size();
+    #endif
   }
-
-  size_t get_capacity() override { return capacity_; }
-
-  void set_capacity(size_t new_capacity) override {}
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
     mutex_lock l(mu_);
     size_t true_size = 0;
-    LRUNode* evic_node = tail->pre;
-    LRUNode* rm_node = evic_node;
-    for (size_t i = 0; i < k_size && evic_node != head; ++i) {
-      evic_ids[i] = evic_node->id;
+
+    LRUNode* evic_node;
+    LRUNode* rm_node;
+
+    // evict from evicted linked list
+    #if STRICT_LRU
+    evic_node = evicted_tail->pre;
+    rm_node = evic_node;
+    for (size_t i = 0; true_size < k_size && evic_node != evicted_head; ++i) {
+      evic_ids[true_size++] = evic_node->id;
+      rm_node = evic_node;
+      evic_node = evic_node->pre;
+      delete rm_node;
+    }
+    evic_node->next = evicted_tail;
+    evicted_tail->pre = evic_node;
+    pending_evict_count -= true_size;
+    if (true_size >= k_size) {
+      return true_size;
+    }
+    #endif
+
+    evic_node = tail->pre;
+    rm_node = evic_node;
+    for (size_t i = 0; true_size < k_size && evic_node != head; ++i) {
+      evic_ids[true_size++] = evic_node->id;
       rm_node = evic_node;
       evic_node = evic_node->pre;
       mp.erase(rm_node->id);
       delete rm_node;
-      true_size++;
     }
     evic_node->next = tail;
     tail->pre = evic_node;
@@ -212,8 +296,41 @@ class LRUCache : public BatchCache<K> {
   }
 
   void update(const K* batch_ids, size_t batch_size, bool use_locking = true) {
+    using Clock = std::chrono::high_resolution_clock;
+    auto start = Clock::now();
     mutex temp_mu;
     auto lock = BatchCache<K>::maybe_lock_cache(mu_, temp_mu, use_locking);
+
+    // Implement strict LRU
+    #if STRICT_LRU
+    if (BatchCache<K>::desired_size > 0) {
+      ssize_t evict_count = mp.size() - BatchCache<K>::desired_size;
+      ssize_t evicted = 0;
+      if (evict_count < 0) evict_count = 0;
+      LRUNode *evic_tail = tail, *evic_head = tail->pre;
+      for (evicted = 0; evicted < evict_count && evic_head != head; ++evicted) {
+        LRUNode *evic_node = evic_head;
+        mp.erase(evic_node->id);
+        evic_head = evic_head->pre;
+      }
+
+      if (evicted > 0) {
+        LRUNode *evic_head_inc = evic_head->next;
+        LRUNode *evic_tail_inc = evic_tail->pre;
+
+        evic_head->next = tail;
+        tail->pre = evic_head;
+
+        evicted_tail->pre->next = evic_head_inc;
+        evic_head_inc->pre = evicted_tail->pre;
+        evic_tail_inc->next = evicted_tail;
+        evicted_tail->pre = evic_tail_inc;
+      }
+
+      pending_evict_count += evicted;
+    }
+    #endif
+  
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       typename std::map<K, LRUNode*>::iterator it = mp.find(id);
@@ -236,6 +353,13 @@ class LRUCache : public BatchCache<K> {
         BatchCache<K>::size_data_[0].num_miss_++;
       }
     }
+    if ((access_.fetch_add(1, std::memory_order_relaxed)) % report_interval_ == 0) {
+      LOG(INFO) << "cache \"" << name_ << "\" statistics: " << BatchCache<K>::DebugString()  << ", actual size=" << mp.size() << ", time=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::nanoseconds(base_time)).count();
+    }
+    auto end = Clock::now();
+
+    auto lru_time = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    base_time += lru_time;
   }
 
   void update(const K* batch_ids, size_t batch_size, const int64* batch_version,
@@ -286,6 +410,13 @@ class LRUCache : public BatchCache<K> {
     update(ids_to_cache.data(), nums_to_cache, false);
   }
 
+  ~LRUCache() override {
+    LOG(INFO) << "cache \"" << name_
+              << "\" destroyed, statistics: " << BatchCache<K>::DebugString();
+  }
+
+  uint64_t base_time = 0;
+
  private:
   class LRUNode {
    public:
@@ -294,26 +425,247 @@ class LRUCache : public BatchCache<K> {
     LRUNode(K id) : id(id), pre(nullptr), next(nullptr) {}
   };
   LRUNode *head, *tail;
-  size_t capacity_;
   std::map<K, LRUNode*> mp;
   std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
   mutex mu_;
+
+  #if STRICT_LRU
+  LRUNode *evicted_head, *evicted_tail;
+  size_t pending_evict_count;
+  #endif
+
+  std::string name_;
+  std::atomic<int64> access_;
+  int64 report_interval_;
+};
+
+template <typename K>
+class ShardedLRUCache: public BatchCache<K> {
+ public:
+  ShardedLRUCache(const std::string& name = "", const int shard_shift = 0): name_(name) {
+    if (shard_shift < 0) {
+      LOG(FATAL) << "Invalid argument shard_shift=" << shard_shift << " when constructing ShardedLRUCache for " << name;
+    }
+    int shard_num = 1 << shard_shift;
+    LOG(INFO) << "Sharded LRU for " << name << " with " << shard_num << " shards";
+    shard_mask_ = shard_num - 1;
+    shards_.resize(shard_num);
+    BatchCache<K>::size_data_.resize(shard_num);
+    for (auto& shard : shards_) {
+      shard.reset(new LRUShard());
+      LRUNode *head = new LRUNode(0);
+      LRUNode *tail = new LRUNode(0);
+      head->next = tail;
+      tail->prev = head;
+      shard->head = head;
+      shard->tail = tail;
+    }
+  }
+
+  ~ShardedLRUCache() override {
+    LOG(INFO) << "Sharded LRU Cache for " << name_ << " Destroying: " <<  BatchCache<K>::DebugString();
+    const size_t num_shards = shards_.size();
+    for (size_t i = 0; i < num_shards; ++i) {
+      LRUShard& shard = *shards_[i];
+      mutex_lock l_prefetch(shard.prefetch_mu_);
+      mutex_lock l_cache(shard.mu_);
+      for (auto iter = shard.prefetch_id_table.begin(); iter != shard.prefetch_id_table.end(); ++iter) {
+        delete iter->second;
+      }
+      shard.prefetch_id_table.clear();
+      for (LRUNode *node = shard.head->next; node != shard.tail;) {
+        LRUNode* rm_node = node;
+        node = node->next;
+        delete rm_node;
+      }
+      delete shard.head;
+      shard.head = nullptr;
+      delete shard.tail;
+      shard.tail = nullptr;
+      shard.size = 0;
+    }
+  }
+
+  size_t size() override {
+    size_t total_size = 0;
+    for (const auto& shard : shards_) {
+      total_size += shard->size;
+    }
+    return total_size;
+  }
+
+  size_t get_evic_ids(K* evic_ids, size_t k_size) override {
+    const size_t num_shards = shards_.size();
+    size_t num_per_shard = k_size / num_shards;
+    size_t remaining = k_size % num_shards;
+    size_t true_size = 0;
+    for (size_t i = 0; i < num_shards; ++i) {
+      LRUShard& shard = *shards_[i];
+      const size_t num_this_shard = num_per_shard + (i < remaining ? 1 : 0);
+      size_t true_num = 0;
+      mutex_lock l(shard.mu_);
+      LRUNode *evic_node = shard.tail->prev;
+      LRUNode *rm_node = evic_node;
+      for (size_t j = 0; j < num_this_shard && evic_node != shard.head; ++j) {
+        evic_ids[true_size] = evic_node->id;
+        rm_node = evic_node;
+        evic_node = evic_node->prev;
+        shard.mp.erase(rm_node->id);
+        delete rm_node;
+        true_size++;
+        true_num++;
+      }
+      evic_node->next = shard.tail;
+      shard.tail->prev = evic_node;
+      shard.size -= true_num;
+    }
+    return true_size;
+  }
+
+  size_t get_cached_ids(K *cached_ids, size_t k_size, int64* cached_versions, int64* cached_freqs) override {
+    const size_t num_shards = shards_.size();
+    size_t num_per_shard = k_size / num_shards;
+    size_t remaining = k_size % num_shards;
+    size_t true_size = 0;
+    for (size_t i = 0; i < num_shards; ++i) {
+      LRUShard& shard = *shards_[i];
+      const size_t num_this_shard = num_per_shard + (i < remaining ? 1 : 0);
+      mutex_lock l(shard.mu_);
+      LRUNode *it = shard.head->next;
+      for (size_t j = 0; j < num_this_shard && it != shard.tail; ++j, it = it->next) {
+        cached_ids[true_size++] = it->id; 
+      }
+    }
+    return true_size;
+  }
+
+  void update(const K* batch_ids, size_t batch_size, bool use_locking = true) override {
+    mutex temp_mu;
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      const size_t shard_idx = id & shard_mask_;
+      LRUShard& shard = *shards_[shard_idx];
+      auto lock = BatchCache<K>::maybe_lock_cache(shard.mu_, temp_mu, use_locking);
+      typename std::map<K, LRUNode*>::iterator it = shard.mp.find(id);
+      if (it != shard.mp.end()) {
+        LRUNode* node = it->second;
+        node->prev->next = node->next;
+        node->next->prev = node->prev;
+        shard.head->next->prev = node;
+        node->next = shard.head->next;
+        shard.head->next = node;
+        node->prev = shard.head;
+        BatchCache<K>::size_data_[shard_idx].num_hit_++;
+      } else {
+        LRUNode* newNode = new LRUNode(id);
+        shard.head->next->prev = newNode;
+        newNode->next = shard.head->next;
+        shard.head->next = newNode;
+        newNode->prev = shard.head;
+        shard.mp[id] = newNode;
+        shard.size++;
+        BatchCache<K>::size_data_[shard_idx].num_miss_++;
+      }
+    }
+  }
+
+  void update(const K* batch_ids, size_t batch_size, const int64 *batch_version,
+              const int64* batch_freqs, bool use_locking = true) override {
+    update(batch_ids, batch_size, use_locking);
+  }
+
+  void add_to_prefetch_list(const K* batch_ids, const size_t batch_size) override {
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      const size_t shard_idx = id & shard_mask_;
+      LRUShard& shard = *shards_[shard_idx];
+      mutex_lock l(shard.prefetch_mu_);
+      auto it_prefetch = shard.prefetch_id_table.find(id);
+      if (it_prefetch == shard.prefetch_id_table.end()) {
+        mutex_lock ll(shard.mu_);
+        auto it_cache = shard.mp.find(id);
+        if (it_cache != shard.mp.end()) {
+          LRUNode *node = it_cache->second;
+          node->prev->next = node->next;
+          node->next->prev = node->prev;
+          delete node;
+          shard.mp.erase(id);
+        }
+        
+        //unlock
+        (mutex_lock)(std::move(ll));
+        shard.prefetch_id_table[id] = new PrefetchNode<K>(id);
+      } else {
+        it_prefetch->second->Ref();
+      }
+    }
+  }
+
+  void add_to_cache(const K* batch_ids, const size_t batch_size) override {
+    std::vector<K> ids_to_cache(batch_size);
+    int64 nums_to_cache = 0;
+    for (size_t i = 0; i < batch_size; ++i) {
+      K id = batch_ids[i];
+      const size_t shard_idx = id & shard_mask_;
+      LRUShard& shard = *shards_[shard_idx];
+      mutex_lock l(shard.prefetch_mu_);
+      auto it_prefetch = shard.prefetch_id_table.find(id);
+      if (it_prefetch == shard.prefetch_id_table.end()) {
+        LOG(FATAL) << "The id should be prefetched before being used.";
+      }
+      it_prefetch->second->UnRef();
+      if (it_prefetch->second->ref_count() == 0) {
+        delete it_prefetch->second;
+        shard.prefetch_id_table.erase(id);
+        ids_to_cache[nums_to_cache++] = id;
+      }
+    }
+    update(ids_to_cache.data(), nums_to_cache, true);
+  }
+
+
+
+ protected:
+ private:
+  class LRUNode {
+   public:
+    K id;
+    LRUNode *prev, *next;
+
+    LRUNode(const K& id) : id(id), prev(nullptr), next(nullptr) {}
+
+    LRUNode(const K& id, const LRUNode* prev, const LRUNode* next)
+        : id(id), prev(prev), next(next) {}
+  };
+
+  class LRUShard {
+   public:
+    LRUNode *head = nullptr, *tail = nullptr;
+    std::map<K, LRUNode*> mp;
+    std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
+    mutex mu_;
+    mutex prefetch_mu_;
+    uint64 size = 0;
+  };
+
+  std::vector<std::unique_ptr<LRUShard>> shards_;
+  uint64 shard_mask_;
+
+  std::string name_;
 };
 
 template <class K>
 class LFUCache : public BatchCache<K> {
  public:
-  LFUCache(size_t capacity) : capacity_(capacity) {
+  LFUCache(const std::string& name, size_t capacity = 0, size_t way = 0, int num_threads = 8) : name_(name) {
     min_freq = std::numeric_limits<size_t>::max();
     max_freq = 0;
     freq_table.emplace_back(
         std::pair<std::list<LFUNode>*, int64>(new std::list<LFUNode>, 0));
     BatchCache<K>::size_data_.resize(1);
+    ReadInt64FromEnvVar("CACHE_REPORT_INTERVAL", 10000, &report_interval_);
+    access_ = 0;
   }
-
-  size_t get_capacity() override { return capacity_; }
-
-  void set_capacity(size_t new_capacity) override {}
 
   size_t size() override {
     mutex_lock l(mu_);
@@ -414,6 +766,12 @@ class LFUCache : public BatchCache<K> {
         BatchCache<K>::size_data_[0].num_hit_++;
       }
     }
+    if ((__sync_fetch_and_add(&access_, 1) + 1) %
+            report_interval_ ==
+        0) {
+      LOG(INFO) << "cache \"" << name_
+                << "\" statistics: " << BatchCache<K>::DebugString();
+    }
   }
 
   void update(const K* batch_ids, const size_t batch_size,
@@ -470,6 +828,12 @@ class LFUCache : public BatchCache<K> {
         key_table[id] = freq_table[curr_freq - 1].first->begin();
         BatchCache<K>::size_data_[0].num_hit_++;
       }
+    }
+    if ((__sync_fetch_and_add(&access_, 1) + 1) %
+            report_interval_ ==
+        0) {
+      LOG(INFO) << "cache \"" << name_
+                << "\" statistics: " << BatchCache<K>::DebugString();
     }
   }
 
@@ -570,11 +934,14 @@ class LFUCache : public BatchCache<K> {
   };
   size_t min_freq;
   size_t max_freq;
-  size_t capacity_;
   std::vector<std::pair<std::list<LFUNode>*, int64>> freq_table;
   std::unordered_map<K, typename std::list<LFUNode>::iterator> key_table;
   std::unordered_map<K, PrefetchLFUNode<K>*> prefetch_id_table;
   mutex mu_;
+  int64 access_;
+  int64 report_interval_;
+
+  std::string name_;
 };
 
 }  // namespace embedding
