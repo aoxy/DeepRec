@@ -387,15 +387,16 @@ def build_feature_columns():
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
         
-        storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
-                                    storage_path=f"{args.emb_dir}/{column}",
-                                    storage_size=[1024 * 1024 * cache_size],
-                                    cache_strategy = CacheStrategyDict[args.cache_strategy],
-                                    profiling_strategy = ProfilingStrategyDict[args.profiling])
+        if cache_size > 0:
+            storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                                        storage_path=f"{args.emb_dir}/{column}",
+                                        storage_size=[1024 * 1024 * cache_size],
+                                        cache_strategy = CacheStrategyDict[args.cache_strategy],
+                                        profiling_strategy = ProfilingStrategyDict[args.profiling])
 
-        ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
-        tf.logging.info(f'[Feature {column}] Use {args.storage_type}, {args.cache_strategy}, {args.profiling}, Cache Capacity {cache_size}MB')
-        cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
+            ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
+            tf.logging.info(f'[Feature {column}] Use {args.storage_type}, {args.cache_strategy}, {args.profiling}, Cache Capacity {cache_size}MB')
+            cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
 
         if args.tf or not args.emb_fusion:
             emb_col = tf.feature_column.embedding_column(

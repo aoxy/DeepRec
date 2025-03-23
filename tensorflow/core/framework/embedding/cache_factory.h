@@ -97,8 +97,7 @@ class CacheFactory {
             return CreateCache<K, BlockLockLRUCache<K>>(profiling_strategy, name, capacity, num_threads, 32, tunable_cache);
           case CacheStrategy::B32LFU:
             LOG(INFO) << " Use Strategy::B32LFU in multi-tier EmbeddingVariable " << name;
-            //  return CreateCache<K, BlockLockLFUCache<K>>(profiling_strategy, name, capacity, num_threads, 32, tunable_cache);
-            return new BlockLockLFUCache<K>(name, capacity, 32, num_threads);
+            return CreateCache<K, BlockLockLFUCache<K>>(profiling_strategy, name, capacity, num_threads, 32, tunable_cache);
           case CacheStrategy::B48LRU:
             LOG(INFO) << " Use Strategy::B48LRU in multi-tier EmbeddingVariable " << name;
             return CreateCache<K, BlockLockLRUCache<K>>(profiling_strategy, name, capacity, num_threads, 48, tunable_cache);

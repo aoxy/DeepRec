@@ -39,7 +39,7 @@ class DramSsdHashStorage : public MultiTierStorage<K, V> {
 
   ~DramSsdHashStorage() override {
     LOG(INFO) << "DRAM Max Size = " << max_dram_size_;
-    LOG(INFO) << "DRAM Size = " << dram_->Size();
+    LOG(INFO) << "DRAM Size = " << dram_->Size() << "   name: " << this->name_;
     MultiTierStorage<K, V>::DeleteFromEvictionManager();
     delete dram_;
     delete ssd_hash_;
