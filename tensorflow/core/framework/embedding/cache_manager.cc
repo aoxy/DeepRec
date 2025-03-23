@@ -84,6 +84,7 @@ void CacheManager::Tune(size_t total_size, size_t unit) {
 
 void CacheManager::DoTune(size_t total_size,
                           std::vector<CacheProp*> props, size_t unit) {
+  LOG(INFO) << "Start DoTune: total_size = " << total_size << ", unit = " << unit;
   std::map<CacheMRCProfiler*, CacheItem> items;
   uint64_t orig_mc_sum = 0;
 
@@ -103,8 +104,9 @@ void CacheManager::DoTune(size_t total_size,
     LOG(INFO) << "Cache \"" << cache->GetName()
               << "\" visit count=" << vc
               << ", estimated hit count=" << vc - mc
-              << ", actual hit count=" << actual_hc << ", relative error="
-              << (double)(int64_t)(vc - mc - actual_hc) / actual_hc;
+              << ", actual hit count=" << actual_hc 
+              << ", relative error=" << (double)(int64_t)(vc - mc - actual_hc) / actual_hc
+              << ", actual_hr=" << actual_hr;
     orig_mc_sum += mc;
     items.emplace(std::piecewise_construct, std::forward_as_tuple(cache),
                   std::forward_as_tuple(bucket_size, size, size, entry_size, min_size, vc,
@@ -122,11 +124,11 @@ void CacheManager::DoTune(size_t total_size,
       kv.first->SetCacheSize(kv.second.new_size);
     }
     notune_counter_ = 0;
-    for (auto prop: props) {
-      prop->profiler->StopSamplingAndReleaseResource();
-    }
-    sampling_active_.store(false, std::memory_order_release);
-    LOG(INFO) << "Stopped sampling";
+    // for (auto prop: props) {
+    //   prop->profiler->StopSamplingAndReleaseResource();
+    // }
+    // sampling_active_.store(false, std::memory_order_release);
+    // LOG(INFO) << "Stopped sampling";
     // for (auto& kv: items) {
     //   LOG(INFO) << "Evicting all items from \"" << kv.first->GetName() << "\"";
     //   kv.first->EvictAll();
@@ -135,6 +137,7 @@ void CacheManager::DoTune(size_t total_size,
 
     return;
   } else {
+    LOG(INFO) << "DoTune Failed.";
     notune_counter_++;
   }
 
@@ -153,7 +156,7 @@ void CacheManager::DoTune(size_t total_size,
 
 void CacheManager::Access(size_t size) {
   access_count_.fetch_add(1, std::memory_order_relaxed);
-  const size_t target_size = total_size_ * 16;
+  const size_t target_size = total_size_;
   if (access_size_.fetch_add(size, std::memory_order_relaxed) + size >= target_size) {
     if (!access_size_lock_.test_and_set(std::memory_order_relaxed)) {
       should_tune_.store(true, std::memory_order_relaxed);
@@ -185,8 +188,12 @@ void CacheManager::StartThread() {
 void CacheManager::TuneLoop() {
   LOG(INFO) << "Tuning Loop Begin";
   while (CheckCache()) {
-    LOG(INFO) << "access count: "
-              << access_count_.load(std::memory_order_relaxed);
+    if (tuning_unit_ == 0){
+      tuning_unit_ = total_size_ / 100;
+    };
+    // LOG(INFO) << "TuneLoop: access_count_: " << access_count_.load(std::memory_order_relaxed);
+    // LOG(INFO) << "TuneLoop: access_size_: " << access_size_.load(std::memory_order_relaxed) << " >? " << total_size_;
+    // LOG(INFO) << "TuneLoop: target_size: " <<  total_size_ * 16;
     size_t cache_count = registry_.size();
     if (should_tune_.load(std::memory_order_relaxed)) {
       should_tune_.store(false, std::memory_order_relaxed);
@@ -198,7 +205,7 @@ void CacheManager::TuneLoop() {
           kv.first->ResetMoveCount();
         }
         uint64 promotions = move_count.first, demotions = move_count.second;
-        LOG(INFO) << "\"" << kv.first->GetName() << "\" promotions: " << promotions << ", demotions:" << demotions;
+        LOG(INFO) << "To DRAM: " << promotions << ", To SSD: " << demotions << ", name: " <<  kv.first->GetName();
         uint64 prev_promotions = stat.prev_promotion, prev_demotions = stat.prev_demotion;
         // skip if there is no promotion
         if (prev_promotions != 0) {
@@ -206,7 +213,7 @@ void CacheManager::TuneLoop() {
           double relative_diff = (std::fabs((double)diff)) / prev_promotions;
           if (relative_diff > 0.2) {
             reactivate = true;
-            LOG(INFO) << "\"" << kv.first->GetName() << "\" promotion diff: " << relative_diff << ", reactivating sampling";
+            LOG(INFO) << "\"" << kv.first->GetName() << "\" To DRAM: " << relative_diff << ", reactivating sampling";
           }
         }
         if (prev_demotions != 0) {
@@ -214,7 +221,7 @@ void CacheManager::TuneLoop() {
           double relative_diff = (std::fabs((double)diff)) / prev_demotions;
           if (relative_diff > 0.2) {
             reactivate = true;
-            LOG(INFO) << "\"" << kv.first->GetName() << "\" demotion diff: " << relative_diff << ", reactivating sampling";
+            LOG(INFO) << "\"" << kv.first->GetName() << "\" To SSD: " << relative_diff << ", reactivating sampling";
           }
         }
         stat.prev_promotion = promotions;
@@ -222,19 +229,14 @@ void CacheManager::TuneLoop() {
       }
       
       if (SamplingActive()) {
-        LOG(INFO) << "access count: " << access_count_ << ", do tune";
         Tune(total_size_, tuning_unit_);
-      } else {
-        LOG(INFO) << "access count: " << access_count_ << ", tuning not active"; 
       }
       LOG(INFO) << "LRU Time: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::nanoseconds(lru_nanos.load()))
-                   .count()
+                   std::chrono::nanoseconds(lru_nanos.load())).count()
             << "ms, Profiler Time: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::nanoseconds(profiler_nanos.load()))
-                   .count()
+                   std::chrono::nanoseconds(profiler_nanos.load())).count()
             << "ms";
       step_ = std::round(access_count_.load(std::memory_order_relaxed) /
                           (tuning_interval_ * cache_count)) + 1;

@@ -199,7 +199,7 @@ class MultiTierStorage : public Storage<K, V>, public TunableCache {
     while (cache_count > cache_capacity_) {
       int k_size = cache_count - cache_capacity_;
       if (k_size > MinEvictionSize) {
-        LOG(INFO) << "Cache \"" << name_ << "\" is evicting " << k_size << " items";
+        // LOG(INFO) << "Cache \"" << name_ << "\" is evicting " << k_size << " items";
         k_size = std::min(k_size, EvictionSize);
         size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
         EvictionWithDelayedDestroy(evic_ids, true_size);

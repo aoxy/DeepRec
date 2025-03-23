@@ -107,8 +107,8 @@ CacheStrategyDict = {
 
 CACHE_SIZES = {
     "user_id": 2443264,
-    "times": 133120,
     "district_id": 3413,
+    "times": 133120,
     "timediff_list": 8605013
 }
 
@@ -594,10 +594,8 @@ def main(tf_config=None, server=None):
              checkpoint_dir)
         eval_time = time.perf_counter()
         print("Eval TimeCost =", eval_time - end_time, "sec")
-    os.makedirs(result_dir, exist_ok=True)
-    with open(result_path, 'w') as f:
-        f.write(str(global_time_cost)+'\n')
-        f.write(str(global_auc)+'\n')
+    print("global_time_cost =", global_time_cost)
+    print("global_auc =", global_auc)
 
 
 def boolean_string(string):
@@ -802,7 +800,10 @@ def set_env_for_DeepRec():
     os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
     os.environ['TF_NUM_INTEROP_THREADS'] = '8'
     os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
-    os.environ['CACHE_TUNING_STRATEGY'] = 'min_mc_local_greedy' # min_mc_local_greedy min_mc_random_greedy
+    os.environ['CACHE_TUNING_STRATEGY'] = 'min_mc_random_greedy' # min_mc_local_greedy min_mc_random_greedy
+    # os.environ['CACHE_MIN_SIZE'] = '4'
+    os.environ['CACHE_TUNING_UNIT'] = '55836672'
+    # os.environ['CACHE_BLOCKS'] = '16384'
 
 
 if __name__ == '__main__':

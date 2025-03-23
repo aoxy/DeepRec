@@ -41,7 +41,7 @@ rep=0702v1
 mkdir -p metrics_$rep/dlrm_log_files/
 cache_cap=5
 python3 train_s.py --data_location=/home/code/elem --smartstaged=True --cache_cap=$cache_cap 1> metrics_$rep/dlrm_log_files/dlrm_log_$cache_cap.txt 2>&1
-python3 train.py --data_location=/home/code/elem --smartstaged=True --storage_type='DRAM_SSDHASH' --profiling=AET --cache_strategy=B32LFU --cache_sizes 1163 64 2 4096 --no_eval 1> train_dlrm_log.txt 2>&1 &
+python3 train.py --data_location=/home/code/elem --smartstaged=True --storage_type='DRAM_SSDHASH' --profiling=AET --cache_strategy=B16LFU --cache_sizes 1163 2 64 4096 --no_eval 1> train_dlrm_log_tune.txt 2>&1
 python3 train.py --data_location=/home/code/elem --smartstaged=True --cache_cap=5 1> dlrm_log.txt 2>&1
 python3 train.py --data_location=/home/code/elem --smartstaged=True --no_eval
 ```

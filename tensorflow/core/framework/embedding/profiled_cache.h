@@ -177,11 +177,14 @@ class ProfiledCacheProxy: public Base {
     if (entry_size_ >= 0xFFFFFFFFL) {
       entry_size_ = tunable_cache_->GetCacheEntrySize();
     }
-
+    using Clock = std::chrono::high_resolution_clock;
+    auto start = Clock::now();
     Base::update(batch_ids, batch_size, batch_version, batch_freqs, use_locking);
+    auto end_base = Clock::now();
     if (cm_.SamplingActive()) {
       profiler_.ReferenceKeyBatch(batch_ids, batch_size);
     }
+    auto end_profiler = Clock::now();
     if (entry_size_ < 0xFFFFFFFFL) {
       const size_t access_size = batch_size * entry_size_;
       if (prev_entry_size != entry_size_) {
@@ -191,6 +194,12 @@ class ProfiledCacheProxy: public Base {
     } else {
       LOG(INFO) << "entry_size_ not ready";
     }
+    auto lru_time =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end_base - start)
+            .count();
+    auto profiler_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             end_profiler - end_base).count();
+    cm_.IncreaseNanos(lru_time, profiler_time);
   }
 
   ~ProfiledCacheProxy() override {
