@@ -37,8 +37,8 @@ class BlockLockLRUCache : public BatchCache<K> {
         is_shrinking_(false),
         is_expanding_(false),
         is_rehash_(false) {
-    block_count_ = (capacity + way_ - 1) / way_;
-    full_ways_ = capacity_ - block_count_ * way_ + block_count_;
+    block_count_ = (capacity_ + way_ - 1) / way_;
+    full_ways_ = capacity_ % way_;
     cache_.resize(block_count_);
     for (size_t i = 0; i < full_ways_; i++) {
       cache_[i] = new CacheBlock(way_);
@@ -77,13 +77,13 @@ class BlockLockLRUCache : public BatchCache<K> {
     if (new_capacity < capacity_) {
       LOG(INFO) << "Use shrink to change cache capacity.=================== " << capacity_ << " To " << new_capacity;
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
-      full_ways_ = new_capacity - block_count_ * new_way_ + block_count_;
+      full_ways_ = new_capacity % new_way_;
       __sync_bool_compare_and_swap(&is_shrinking_, false, true);
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
     } else if (new_capacity > base_capacity_ * 2) {
       LOG(INFO) << "Use rehash to change cache capacity.++++++++++++++ " << capacity_ << " To " << new_capacity;
       size_t new_block_count_ = (new_capacity + way_ - 1) / way_;
-      size_t new_full_ways_ = new_capacity - new_block_count_ * way_ + new_block_count_;
+      size_t new_full_ways_ = new_capacity % way_;
       __sync_bool_compare_and_swap(&is_rehash_, false, true);
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
       std::vector<CacheBlock*> new_cache_;
@@ -119,13 +119,14 @@ class BlockLockLRUCache : public BatchCache<K> {
         mutex_lock l(rehash_mu_);
         cache_.swap(new_cache_);
         block_count_ = new_block_count_;
+        full_ways_ = new_full_ways_;
         base_capacity_ = capacity_;
       }
       __sync_bool_compare_and_swap(&is_rehash_, true, false);
     } else {
       LOG(INFO) << "Use append to change cache capacity.=================== " << capacity_ << " To " << new_capacity;
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
-      full_ways_ = new_capacity - block_count_ * new_way_ + block_count_;
+      full_ways_ = new_capacity % new_way_;
       __sync_bool_compare_and_swap(&is_expanding_, false, true);
       __sync_bool_compare_and_swap(&is_shrinking_, true, false);
     }
@@ -272,11 +273,11 @@ class BlockLockLRUCache : public BatchCache<K> {
   typedef google::dense_hash_set_lockless<K> LocklessHashSet;
   LocklessHashSet evicted;
   mutex sync_idx_mu_;
-  int block_count_;
-  int full_ways_;
-  int num_threads_;
-  int way_;
-  int new_way_;
+  unsigned int block_count_;
+  unsigned int full_ways_;
+  unsigned int num_threads_;
+  unsigned int way_;
+  unsigned int new_way_;
   size_t capacity_;
   size_t base_capacity_;
   bool is_shrinking_;
