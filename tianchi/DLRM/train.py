@@ -612,7 +612,7 @@ def get_arg_parser():
     parser.add_argument('--data_location',
                         help='Full path of train data',
                         required=False,
-                        default='./data')
+                        default='/home/code/elem')
     parser.add_argument('--steps',
                         help='set the number of steps on train dataset',
                         type=int,
@@ -677,7 +677,7 @@ def get_arg_parser():
     parser.add_argument('--smartstaged', \
                         help='Whether to enable smart staged feature of DeepRec.',
                         type=boolean_string,
-                        default=False)
+                        default=True)
     parser.add_argument('--emb_fusion', \
                         help='Whether to enable embedding fusion, Default to True.',
                         type=boolean_string,
@@ -798,12 +798,12 @@ def set_env_for_DeepRec():
     os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
     os.environ['TF_SSDHASH_IO_SCHEME'] = 'directio' # directio, mmap_and_madvise
     os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
-    os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
-    os.environ['TF_NUM_INTEROP_THREADS'] = '8'
-    os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
-    os.environ['CACHE_TUNING_STRATEGY'] = 'min_mc_random_greedy' # min_mc_local_greedy min_mc_random_greedy
+    # os.environ['TF_DISABLE_EV_ALLOCATOR'] = 'True'
+    # os.environ['TF_NUM_INTEROP_THREADS'] = '8'
+    # os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
+    # os.environ['CACHE_TUNING_STRATEGY'] = 'min_mc_random_greedy' # min_mc_local_greedy min_mc_random_greedy
     # os.environ['CACHE_MIN_SIZE'] = '4'
-    os.environ['CACHE_TUNING_UNIT'] = '55836672'
+    # os.environ['CACHE_TUNING_UNIT'] = '55836672'
     # os.environ['CACHE_BLOCKS'] = '16384'
 
 
