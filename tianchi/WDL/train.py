@@ -20,78 +20,117 @@ import os
 import sys
 import math
 import collections
+from tensorflow.python.client import timeline
 import json
 
-from tensorflow.python.feature_column import utils as fc_utils
-
-result_dir='/tmp/tianchi/result/WDL/'
-result_path=result_dir+'result'
-global_time_cost = 0
-global_auc = 0
+from tensorflow.python.ops import partitioned_variables
+from tensorflow.python.feature_column import feature_column_v2
+from tensorflow.core.framework.embedding import config_pb2
 
 # Set to INFO for tracking training, default is WARN. ERROR for least messages
 tf.logging.set_verbosity(tf.logging.INFO)
 print("Using TensorFlow version %s" % (tf.__version__))
 
 # Definition of some constants
+CONTINUOUS_COLUMNS = ['I' + str(i) for i in range(1, 14)]  # 1-13 inclusive
+CATEGORICAL_COLUMNS = ['C' + str(i) for i in range(1, 27)]  # 1-26 inclusive
 LABEL_COLUMN = ['clicked']
-LABEL_COLUMN_DEFAULTS = [0]
-USER_COLUMNS = [
-    'user_id', 'gender', 'visit_city', 'avg_price', 'is_supervip', 'ctr_30',
-    'ord_30', 'total_amt_30'
-]
-USER_COLUMNS_DEFAULTS = ['', -99, '0', 0.0, 0, 0, 0, 0.0]
-ITEM_COLUMN = [
-    'shop_id', 'item_id', 'city_id', 'district_id', 'shop_aoi_id',
-    'shop_geohash_6', 'shop_geohash_12', 'brand_id', 'category_1_id',
-    'merge_standard_food_id', 'rank_7', 'rank_30', 'rank_90'
-]
-ITEM_COLUMN_DEFAULTS = ['', '', '0', '0', '', '', '', '0', '0', '0', 0, 0, 0]
-HISTORY_COLUMN = [
-    'shop_id_list', 'item_id_list', 'category_1_id_list',
-    'merge_standard_food_id_list', 'brand_id_list', 'price_list',
-    'shop_aoi_id_list', 'shop_geohash6_list', 'timediff_list', 'hours_list',
-    'time_type_list', 'weekdays_list'
-]
-HISTORY_COLUMN_DEFAULTS = ['', '', '', '', '', '0', '', '', '0', '-0', '', '']
-USER_TZ_COLUMN = ['times', 'hours', 'time_type', 'weekdays', 'geohash12']
-USER_TZ_COLUMN_DEFAULTS = ['0', 0, '', 0, '']
-DEFAULTS = LABEL_COLUMN_DEFAULTS + USER_COLUMNS_DEFAULTS + ITEM_COLUMN_DEFAULTS + HISTORY_COLUMN_DEFAULTS + USER_TZ_COLUMN_DEFAULTS
+TRAIN_DATA_COLUMNS = LABEL_COLUMN + CONTINUOUS_COLUMNS + CATEGORICAL_COLUMNS
+FEATURE_COLUMNS = CONTINUOUS_COLUMNS + CATEGORICAL_COLUMNS
+HASH_BUCKET_SIZES = {
+    'C1': 2500,
+    'C2': 2000,
+    'C3': 300000,
+    'C4': 250000,
+    'C5': 1000,
+    'C6': 100,
+    'C7': 20000,
+    'C8': 4000,
+    'C9': 20,
+    'C10': 100000,
+    'C11': 10000,
+    'C12': 250000,
+    'C13': 40000,
+    'C14': 100,
+    'C15': 100,
+    'C16': 200000,
+    'C17': 50,
+    'C18': 10000,
+    'C19': 4000,
+    'C20': 20,
+    'C21': 250000,
+    'C22': 100,
+    'C23': 100,
+    'C24': 250000,
+    'C25': 400,
+    'C26': 100000
+}
 
-FEATURE_COLUMNS = USER_COLUMNS + ITEM_COLUMN + HISTORY_COLUMN + USER_TZ_COLUMN
-TRAIN_DATA_COLUMNS = LABEL_COLUMN + FEATURE_COLUMNS
-SHARE_EMBEDDING_COLS = [
-    ['shop_id', 'shop_id_list'], ['item_id', 'item_id_list'],
-    ['category_1_id', 'category_1_id_list'],
-    ['merge_standard_food_id', 'merge_standard_food_id_list'],
-    ['brand_id', 'brand_id_list'], ['shop_aoi_id', 'shop_aoi_id_list'],
-    ['shop_geohash_12', 'geohash12'], ['shop_geohash_6', 'shop_geohash6_list'],
-    ['visit_city', 'city_id']
-]
-EMBEDDING_COLS = ['user_id', 'district_id', 'times', 'timediff_list']
-CONTINUOUS_COLUMNS = [
-    'gender', 'avg_price', 'is_supervip', 'ctr_30', 'ord_30', 'total_amt_30',
-    'rank_7', 'rank_30', 'rank_90', 'hours'
-]
-CONTINUOUS_HISTORY_COLUMNS = ['price_list', 'hours_list']
-TYPE_COLS = ['time_type', 'time_type_list']
-TYPE_LIST = ['lunch', 'night', 'dinner', 'tea', 'breakfast']
+EMBEDDING_DIMENSIONS = {
+    'C1': 64,
+    'C2': 64,
+    'C3': 128,
+    'C4': 128,
+    'C5': 64,
+    'C6': 64,
+    'C7': 64,
+    'C8': 64,
+    'C9': 64,
+    'C10': 128,
+    'C11': 64,
+    'C12': 128,
+    'C13': 64,
+    'C14': 64,
+    'C15': 64,
+    'C16': 128,
+    'C17': 64,
+    'C18': 64,
+    'C19': 64,
+    'C20': 64,
+    'C21': 128,
+    'C22': 64,
+    'C23': 64,
+    'C24': 128,
+    'C25': 64,
+    'C26': 128
+}
 
-HASH_BUCKET_SIZES = 100000
-EMBEDDING_DIMENSIONS = 16
+
+StorageTypeDict = {
+    'DRAM': config_pb2.StorageType.DRAM,
+    'DRAM_SSDHASH': config_pb2.StorageType.DRAM_SSDHASH,
+    'DRAM_LEVELDB': config_pb2.StorageType.DRAM_LEVELDB,
+}
+
+ProfilingStrategyDict = {
+    'NONE': config_pb2.ProfilingStrategy.NONE,
+    'AET': config_pb2.ProfilingStrategy.AET,
+}
+
+CacheStrategyDict = {
+    'LRU': config_pb2.CacheStrategy.LRU,
+    'LFU': config_pb2.CacheStrategy.LFU,
+    'B16LRU': config_pb2.CacheStrategy.B16LRU,
+    'B16LFU': config_pb2.CacheStrategy.B16LFU,
+    'B32LRU': config_pb2.CacheStrategy.B32LRU,
+    'B32LFU': config_pb2.CacheStrategy.B32LFU,
+    'B48LRU': config_pb2.CacheStrategy.B48LRU,
+    'B48LFU': config_pb2.CacheStrategy.B48LFU,
+}
 
 
 class WDL():
-
     def __init__(self,
                  wide_column=None,
                  deep_column=None,
-                 dnn_hidden_units=[1024, 512, 256, 64],
+                 dnn_hidden_units=[1024, 512, 256],
                  optimizer_type='adam',
-                 learning_rate=0.01,
+                 linear_learning_rate=0.2,
+                 deep_learning_rate=0.01,
                  inputs=None,
                  bf16=False,
                  stock_tf=None,
+                 adaptive_emb=False,
                  input_layer_partitioner=None,
                  dense_layer_partitioner=None):
         if not inputs:
@@ -107,9 +146,11 @@ class WDL():
         self.tf = stock_tf
         self.bf16 = False if self.tf else bf16
         self.is_training = True
+        self._adaptive_emb = adaptive_emb
 
         self._dnn_hidden_units = dnn_hidden_units
-        self._learning_rate = learning_rate
+        self._linear_learning_rate = linear_learning_rate
+        self._deep_learning_rate = deep_learning_rate
         self._optimizer_type = optimizer_type
         self._input_layer_partitioner = input_layer_partitioner
         self._dense_layer_partitioner = dense_layer_partitioner
@@ -143,28 +184,28 @@ class WDL():
 
     # create model
     def _create_model(self):
-        # input layer
-        with tf.variable_scope('input_layer',
-                               partitioner=self._input_layer_partitioner,
-                               reuse=tf.AUTO_REUSE):
-            for key in HISTORY_COLUMN:
-                self._feature[key] = tf.strings.split(self._feature[key], ';')
-            for key in CONTINUOUS_HISTORY_COLUMNS:
-                length = fc_utils.sequence_length_from_sparse_tensor(
-                    self._feature[key])
-                length = tf.expand_dims(length, -1)
-                self._feature[key] = tf.sparse.to_dense(self._feature[key],
-                                                        default_value='0')
-                self._feature[key] = tf.strings.to_number(self._feature[key])
-                self._feature[key] = tf.reduce_sum(self._feature[key], 1, True)
-                self._feature[key] = tf.math.divide(
-                    self._feature[key], tf.cast(length, tf.float32))
-            net = tf.feature_column.input_layer(
-                features=self._feature, feature_columns=self._deep_column)
-            self._add_layer_summary(net, 'input_layer')
-
         # Dnn part
         with tf.variable_scope('dnn'):
+            # input layer
+            with tf.variable_scope('input_from_feature_columns',
+                                   partitioner=self._input_layer_partitioner,
+                                   reuse=tf.AUTO_REUSE):
+                if self._adaptive_emb and not self.tf:
+                    '''Adaptive Embedding Feature Part 1 of 2'''
+                    adaptive_mask_tensors = {}
+                    for col in CATEGORICAL_COLUMNS:
+                        adaptive_mask_tensors[col] = tf.ones([args.batch_size],
+                                                             tf.int32)
+                    net = tf.feature_column.input_layer(
+                        features=self._feature,
+                        feature_columns=self._deep_column,
+                        adaptive_mask_tensors=adaptive_mask_tensors)
+                else:
+                    net = tf.feature_column.input_layer(
+                        features=self._feature,
+                        feature_columns=self._deep_column)
+                self._add_layer_summary(net, 'input_from_feature_columns')
+
             # hidden layers
             dnn_scope = tf.variable_scope('dnn_layers', \
                 partitioner=self._dense_layer_partitioner, reuse=tf.AUTO_REUSE)
@@ -173,7 +214,6 @@ class WDL():
                 if self.bf16:
                     net = tf.cast(net, dtype=tf.bfloat16)
 
-                net = tf.nn.l2_normalize(net)
                 net = self._dnn(net, self._dnn_hidden_units, 'hiddenlayer')
 
                 if self.bf16:
@@ -192,13 +232,23 @@ class WDL():
         # linear part
         with tf.variable_scope(
                 'linear', partitioner=self._dense_layer_partitioner) as scope:
-            linear_logits = tf.feature_column.linear_model(
-                units=1,
-                features=self._feature,
-                feature_columns=self._wide_column,
-                sparse_combiner='sum',
-                weight_collections=None,
-                trainable=True)
+            if args.tf or not args.emb_fusion:
+                linear_logits = tf.feature_column.linear_model(
+                    units=1,
+                    features=self._feature,
+                    feature_columns=self._wide_column,
+                    sparse_combiner='sum',
+                    weight_collections=None,
+                    trainable=True)
+            else:
+                linear_logits = tf.feature_column.linear_model(
+                    units=1,
+                    features=self._feature,
+                    feature_columns=self._wide_column,
+                    sparse_combiner='sum',
+                    weight_collections=None,
+                    trainable=True,
+                    do_fusion=args.emb_fusion)
 
             self._add_layer_summary(linear_logits, scope.name)
 
@@ -209,51 +259,59 @@ class WDL():
     # compute loss
     def _create_loss(self):
         self._logits = tf.squeeze(self._logits)
-        ones = tf.ones_like(self._label, dtype=self._label.dtype)
-        cond = (self._label >= ones)
-        pos_weight = tf.cast(ones, tf.float32) * 1
-        neg_weight = tf.cast(ones, tf.float32) * 1
-        weights = tf.where(cond, pos_weight, neg_weight)
         self.loss = tf.losses.sigmoid_cross_entropy(
             self._label,
             self._logits,
-            weights=weights,
             scope='loss',
-            # reduction=tf.losses.Reduction.SUM)
             reduction=tf.losses.Reduction.SUM_OVER_BATCH_SIZE)
         tf.summary.scalar('loss', self.loss)
 
+    # define optimizer and generate train_op
     def _create_optimizer(self):
         self.global_step = tf.train.get_or_create_global_step()
         if self.tf or self._optimizer_type == 'adam':
-            optimizer = tf.train.AdamOptimizer(
-                learning_rate=self._learning_rate,
+            dnn_optimizer = tf.train.AdamOptimizer(
+                learning_rate=self._deep_learning_rate,
                 beta1=0.9,
                 beta2=0.999,
                 epsilon=1e-8)
         elif self._optimizer_type == 'adagrad':
-            optimizer = tf.train.AdagradOptimizer(
-                learning_rate=self._learning_rate,
+            dnn_optimizer = tf.train.AdagradOptimizer(
+                learning_rate=self._deep_learning_rate,
                 initial_accumulator_value=0.1,
                 use_locking=False)
         elif self._optimizer_type == 'adamasync':
-            optimizer = tf.train.AdamAsyncOptimizer(
-                learning_rate=self._learning_rate,
+            dnn_optimizer = tf.train.AdamAsyncOptimizer(
+                learning_rate=self._deep_learning_rate,
                 beta1=0.9,
                 beta2=0.999,
                 epsilon=1e-8)
         elif self._optimizer_type == 'adagraddecay':
-            optimizer = tf.train.AdagradDecayOptimizer(
-                learning_rate=self._learning_rate,
+            dnn_optimizer = tf.train.AdagradDecayOptimizer(
+                learning_rate=self._deep_learning_rate,
                 global_step=self.global_step)
         else:
-            raise ValueError("Optimzier type error.")
+            raise ValueError("Optimizer type error.")
 
+        linear_optimizer = tf.train.FtrlOptimizer(
+            learning_rate=self._linear_learning_rate,
+            l1_regularization_strength=0.0,
+            l2_regularization_strength=0.0)
+        train_ops = []
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-
-            self.train_op = optimizer.minimize(self.loss,
-                                               global_step=self.global_step)
+            train_ops.append(
+                dnn_optimizer.minimize(self.loss,
+                                       var_list=tf.get_collection(
+                                           tf.GraphKeys.TRAINABLE_VARIABLES,
+                                           scope='dnn'),
+                                       global_step=self.global_step))
+            train_ops.append(
+                linear_optimizer.minimize(self.loss,
+                                          var_list=tf.get_collection(
+                                              tf.GraphKeys.TRAINABLE_VARIABLES,
+                                              scope='linear')))
+            self.train_op = tf.group(*train_ops)
 
     # compute acc & auc
     def _create_metrics(self):
@@ -268,78 +326,127 @@ class WDL():
 
 # generate dataset pipline
 def build_model_input(filename, batch_size, num_epochs):
-
     def parse_csv(value):
         tf.logging.info('Parsing {}'.format(filename))
+        cont_defaults = [[0.0] for i in range(1, 14)]
+        cate_defaults = [[' '] for i in range(1, 27)]
+        label_defaults = [[0]]
         column_headers = TRAIN_DATA_COLUMNS
-        columns = tf.io.decode_csv(value, record_defaults=DEFAULTS)
+        record_defaults = label_defaults + cont_defaults + cate_defaults
+        columns = tf.io.decode_csv(value, record_defaults=record_defaults)
         all_columns = collections.OrderedDict(zip(column_headers, columns))
         labels = all_columns.pop(LABEL_COLUMN[0])
         features = all_columns
         return features, labels
 
-    files = filename
+    def parse_parquet(value):
+        tf.logging.info('Parsing {}'.format(filename))
+        labels = value.pop(LABEL_COLUMN[0])
+        features = value
+        return features, labels
+
+    '''Work Queue Feature'''
+    if args.workqueue and not args.tf:
+        from tensorflow.python.ops.work_queue import WorkQueue
+        work_queue = WorkQueue([filename], num_epochs=num_epochs)
+        # For multiple files：
+        # work_queue = WorkQueue([filename, filename1,filename2,filename3])
+        files = work_queue.input_dataset()
+    else:
+        files = filename
     # Extract lines from input files using the Dataset API.
-    dataset = tf.data.TextLineDataset(files)
-    dataset = dataset.shuffle(buffer_size=20000,
-                              seed=args.seed)  # fix seed for reproducing
-    dataset = dataset.repeat(num_epochs)
-    dataset = dataset.batch(batch_size)
-    dataset = dataset.map(parse_csv, num_parallel_calls=28)
+    if args.parquet_dataset and not args.tf:
+        from tensorflow.python.data.experimental.ops import parquet_dataset_ops
+        dataset = parquet_dataset_ops.ParquetDataset(files, batch_size=batch_size)
+        if args.parquet_dataset_shuffle:
+            dataset = dataset.shuffle(buffer_size=20000,
+                                      seed=args.seed)  # fix seed for reproducing
+        if not args.workqueue:
+            dataset = dataset.repeat(num_epochs)
+        dataset = dataset.map(parse_parquet, num_parallel_calls=28)
+    else:
+        dataset = tf.data.TextLineDataset(files)
+        dataset = dataset.shuffle(buffer_size=20000,
+                                  seed=args.seed)  # fix seed for reproducing
+        if not args.workqueue:
+            dataset = dataset.repeat(num_epochs)
+        dataset = dataset.batch(batch_size)
+        dataset = dataset.map(parse_csv, num_parallel_calls=28)
     dataset = dataset.prefetch(2)
     return dataset
 
 
 # generate feature columns
 def build_feature_columns():
+    # Notes: Statistics of Kaggle's Criteo Dataset has been calculated in advance to save time.
+    mins_list = [
+        0.0, -3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    ]
+    range_list = [
+        1539.0, 22069.0, 65535.0, 561.0, 2655388.0, 233523.0, 26297.0, 5106.0,
+        24376.0, 9.0, 181.0, 1807.0, 6879.0
+    ]
+
+    def make_minmaxscaler(min, range):
+        def minmaxscaler(col):
+            return (col - min) / range
+
+        return minmaxscaler
+
     deep_columns = []
     wide_columns = []
-    for columns in SHARE_EMBEDDING_COLS:
-        cate_cols = []
-        for col in columns:
-            cate_col = tf.feature_column.categorical_column_with_hash_bucket(
-                col, HASH_BUCKET_SIZES)
-            cate_cols.append(cate_col)
-            if col not in HISTORY_COLUMN:
-                wide_columns.append(cate_col)
-        deep_columns.extend(
-            tf.feature_column.shared_embedding_columns(cate_cols,
-                                                       EMBEDDING_DIMENSIONS))
 
-    for column in EMBEDDING_COLS:
-        cate_col = tf.feature_column.categorical_column_with_hash_bucket(
-            column, HASH_BUCKET_SIZES)
-        wide_columns.append(cate_col)
+    os.makedirs(args.emb_dir, exist_ok=True)
 
-        if args.tf or not args.emb_fusion:
-            deep_columns.append(
-                tf.feature_column.embedding_column(cate_col,
-                                                   EMBEDDING_DIMENSIONS))
+    if len(args.cache_sizes) == 1:
+        cache_sizes_list = [int(args.cache_sizes[0]) for _ in CATEGORICAL_COLUMNS]
+    elif len(args.cache_sizes) == len(CATEGORICAL_COLUMNS):
+        cache_sizes_list = [int(x) for x in args.cache_sizes]
+    else:
+        print("Invalid cache_sizes:", args.cache_sizes)
+        exit(-1)
+    
+    for column_name in FEATURE_COLUMNS:
+        if column_name in CATEGORICAL_COLUMNS:
+            categorical_column = tf.feature_column.categorical_column_with_hash_bucket(
+                column_name, hash_bucket_size=10000, dtype=tf.string)
+            wide_columns.append(categorical_column)
+
+            cache_size = cache_sizes_list[CATEGORICAL_COLUMNS.index(column_name)]
+            if cache_size > 0:
+                storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                                            storage_path=f"{args.emb_dir}/{column_name}",
+                                            storage_size=[1024 * 1024 * cache_size],
+                                            cache_strategy = CacheStrategyDict[args.cache_strategy],
+                                            profiling_strategy = ProfilingStrategyDict[args.profiling])
+
+                ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
+                tf.logging.info(f'[Feature {column_name}] Use {args.storage_type}, {args.cache_strategy}, {args.profiling}, Cache Capacity {cache_size}MB')
+                categorical_column = feature_column_v2.categorical_column_with_embedding(column_name, dtype=tf.string, ev_option=ev_opt)
+
+
+            if args.tf or not args.emb_fusion:
+                embedding_column = tf.feature_column.embedding_column(
+                    categorical_column,
+                    dimension=EMBEDDING_DIMENSIONS[column_name],
+                    combiner='mean')
+            else:
+                '''Embedding Fusion Feature'''
+                embedding_column = tf.feature_column.embedding_column(
+                    categorical_column,
+                    dimension=EMBEDDING_DIMENSIONS[column_name],
+                    combiner='mean',
+                    do_fusion=args.emb_fusion)
+
+            deep_columns.append(embedding_column)
         else:
-            deep_columns.append(
-                tf.feature_column.embedding_column(cate_col,
-                                                   EMBEDDING_DIMENSIONS,
-                                                   do_fusion=args.emb_fusion))
-
-    for column in CONTINUOUS_COLUMNS + CONTINUOUS_HISTORY_COLUMNS:
-        num_column = tf.feature_column.numeric_column(column)
-        wide_columns.append(num_column)
-        deep_columns.append(num_column)
-
-    for column in TYPE_COLS:
-        cate_col = tf.feature_column.categorical_column_with_vocabulary_list(
-            column, TYPE_LIST)
-        if col not in HISTORY_COLUMN:
-            wide_columns.append(cate_col)
-        if args.tf or not args.emb_fusion:
-            deep_columns.append(
-                tf.feature_column.embedding_column(cate_col,
-                                                   EMBEDDING_DIMENSIONS))
-        else:
-            deep_columns.append(
-                tf.feature_column.embedding_column(cate_col,
-                                                   EMBEDDING_DIMENSIONS,
-                                                   do_fusion=args.emb_fusion))
+            normalizer_fn = None
+            i = CONTINUOUS_COLUMNS.index(column_name)
+            normalizer_fn = make_minmaxscaler(mins_list[i], range_list[i])
+            column = tf.feature_column.numeric_column(
+                column_name, normalizer_fn=normalizer_fn, shape=(1, ))
+            wide_columns.append(column)
+            deep_columns.append(column)
 
     return wide_columns, deep_columns
 
@@ -356,10 +463,10 @@ def train(sess_config,
     hooks = []
     hooks.extend(input_hooks)
 
+    sharded_saver = tf_config != None
     scaffold = tf.train.Scaffold(
-        local_init_op=tf.group(tf.tables_initializer(),
-                               tf.local_variables_initializer(), data_init_op),
-        saver=tf.train.Saver(max_to_keep=args.keep_checkpoint_max))
+        local_init_op=tf.group(tf.local_variables_initializer(), data_init_op),
+        saver=tf.train.Saver(max_to_keep=args.keep_checkpoint_max, sharded=sharded_saver))
 
     stop_hook = tf.train.StopAtStepHook(last_step=steps)
     log_hook = tf.train.LoggingTensorHook(
@@ -374,25 +481,31 @@ def train(sess_config,
             tf.train.ProfilerHook(save_steps=args.timeline,
                                   output_dir=checkpoint_dir))
     save_steps = args.save_steps if args.save_steps or args.no_eval else steps
+    '''
+                            Incremental_Checkpoint
+    Please add `save_incremental_checkpoint_secs` in 'tf.train.MonitoredTrainingSession'
+    it's default to None, Incremental_save checkpoint time in seconds can be set
+    to use incremental checkpoint function, like `tf.train.MonitoredTrainingSession(
+        save_incremental_checkpoint_secs=args.incremental_ckpt)`
+    '''
+    if args.incremental_ckpt and not args.tf:
+        print("Incremental_Checkpoint is not really enabled.")
+        print("Please see the comments in the code.")
+        sys.exit()
 
-    time_start = time.perf_counter()
     with tf.train.MonitoredTrainingSession(
             master=server.target if server else '',
             is_chief=tf_config['is_chief'] if tf_config else True,
             hooks=hooks,
             scaffold=scaffold,
             checkpoint_dir=checkpoint_dir,
-            save_checkpoint_steps=steps,
+            save_checkpoint_steps=save_steps,
             summary_dir=checkpoint_dir,
-            save_summaries_steps=None,
+            save_summaries_steps=args.save_steps,
             config=sess_config) as sess:
         while not sess.should_stop():
             sess.run([model.loss, model.train_op])
-    time_end = time.perf_counter()
     print("Training completed.")
-    time_cost = time_end - time_start
-    global global_time_cost
-    global_time_cost = time_cost
 
 
 def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
@@ -401,8 +514,7 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
     hooks.extend(input_hooks)
 
     scaffold = tf.train.Scaffold(
-        local_init_op=tf.group(tf.tables_initializer(),
-                               tf.local_variables_initializer(), data_init_op))
+        local_init_op=tf.group(tf.local_variables_initializer(), data_init_op))
     session_creator = tf.train.ChiefSessionCreator(
         scaffold=scaffold, checkpoint_dir=checkpoint_dir, config=sess_config)
     writer = tf.summary.FileWriter(os.path.join(checkpoint_dir, 'eval'))
@@ -413,31 +525,47 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
         for _in in range(1, steps + 1):
             if (_in != steps):
                 sess.run([model.acc_op, model.auc_op])
-                if (_in % 100 == 0):
-                    print("Evaluation complate:[{}/{}]".format(_in, steps))
+                if (_in % 1000 == 0):
+                    print("Evaluation complete:[{}/{}]".format(_in, steps))
             else:
                 eval_acc, eval_auc, events = sess.run(
                     [model.acc_op, model.auc_op, merged])
                 writer.add_summary(events, _in)
-                print("Evaluation complate:[{}/{}]".format(_in, steps))
+                print("Evaluation complete:[{}/{}]".format(_in, steps))
                 print("ACC = {}\nAUC = {}".format(eval_acc, eval_auc))
-                global global_auc
-                global_auc = eval_auc
 
 
 def main(tf_config=None, server=None):
     # check dataset and count data set size
     print("Checking dataset...")
-    train_file = os.path.join(args.data_location, 'train.csv')
-    test_file = os.path.join(args.data_location, 'eval.csv')
+    train_file = args.data_location
+    test_file = args.data_location
+    if args.parquet_dataset and not args.tf:
+        train_file += '/train.parquet'
+        test_file += '/eval.parquet'
+    else:
+        train_file += '/train.csv'
+        test_file += '/eval.csv'
+    print(train_file)
     if (not os.path.exists(train_file)) or (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_training_examples = sum(1 for line in open(train_file))
-    no_of_test_examples = sum(1 for line in open(test_file))
+    no_of_training_examples = 0
+    no_of_test_examples = 0
+    if args.parquet_dataset and not args.tf:
+        import pyarrow.parquet as pq
+        no_of_training_examples = pq.read_table(train_file).num_rows
+        no_of_test_examples = pq.read_table(test_file).num_rows
+    else:
+        no_of_training_examples = sum(1 for line in open(train_file))
+        no_of_test_examples = sum(1 for line in open(test_file))
+    print("Numbers of training dataset is {}".format(no_of_training_examples))
+    print("Numbers of test dataset is {}".format(no_of_test_examples))
 
     # set batch size, eporch & steps
-    batch_size = args.batch_size
+    batch_size = math.ceil(
+        args.batch_size / args.micro_batch
+    ) if args.micro_batch and not args.tf else args.batch_size
 
     if args.steps == 0:
         no_of_epochs = 1
@@ -464,8 +592,10 @@ def main(tf_config=None, server=None):
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
     test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                               test_dataset.output_shapes)
+    dataset_output_types = tf.data.get_output_types(train_dataset)
+    dataset_output_shapes = tf.data.get_output_shapes(test_dataset)
+    iterator = tf.data.Iterator.from_structure(dataset_output_types,
+                                               dataset_output_shapes)
     next_element = iterator.get_next()
 
     train_init_op = iterator.make_initializer(train_dataset)
@@ -474,8 +604,24 @@ def main(tf_config=None, server=None):
     # create feature column
     wide_column, deep_column = build_feature_columns()
 
+    # create variable partitioner for distributed training
+    num_ps_replicas = len(tf_config['ps_hosts']) if tf_config else 0
+    input_layer_partitioner = partitioned_variables.min_max_variable_partitioner(
+        max_partitions=num_ps_replicas,
+        min_slice_size=args.input_layer_partitioner <<
+        20) if args.input_layer_partitioner else None
+    dense_layer_partitioner = partitioned_variables.min_max_variable_partitioner(
+        max_partitions=num_ps_replicas,
+        min_slice_size=args.dense_layer_partitioner <<
+        10) if args.dense_layer_partitioner else None
+
     # Session config
     sess_config = tf.ConfigProto()
+    if tf_config:
+        sess_config.device_filters.append("/job:ps")
+    sess_config.inter_op_parallelism_threads = args.inter
+    sess_config.intra_op_parallelism_threads = args.intra
+
     # Session hooks
     hooks = []
 
@@ -487,26 +633,32 @@ def main(tf_config=None, server=None):
     if args.op_fusion and not args.tf:
         '''Auto Graph Fusion'''
         sess_config.graph_options.optimizer_options.do_op_fusion = True
+    if args.micro_batch and not args.tf:
+        '''Auto Mirco Batch'''
+        sess_config.graph_options.optimizer_options.micro_batch_num = args.micro_batch
 
     # create model
     model = WDL(wide_column=wide_column,
                 deep_column=deep_column,
-                learning_rate=args.learning_rate,
+                linear_learning_rate=args.linear_learning_rate,
+                deep_learning_rate=args.deep_learning_rate,
                 optimizer_type=args.optimizer,
                 bf16=args.bf16,
                 stock_tf=args.tf,
-                inputs=next_element)
+                adaptive_emb=args.adaptive_emb,
+                inputs=next_element,
+                input_layer_partitioner=input_layer_partitioner,
+                dense_layer_partitioner=dense_layer_partitioner)
 
     # Run model training and evaluation
+    start_time = time.perf_counter()
     train(sess_config, hooks, model, train_init_op, train_steps,
           checkpoint_dir, tf_config, server)
+    end_time = time.perf_counter()
+    print("Train TimeCost =", end_time - start_time, "sec")
     if not (args.no_eval or tf_config):
         eval(sess_config, hooks, model, test_init_op, test_steps,
              checkpoint_dir)
-    os.makedirs(result_dir, exist_ok=True)
-    with open(result_path, 'w') as f:
-        f.write(str(global_time_cost)+'\n')
-        f.write(str(global_auc)+'\n')
 
 
 def boolean_string(string):
@@ -530,7 +682,7 @@ def get_arg_parser():
     parser.add_argument('--batch_size',
                         help='Batch size to train. Default is 512',
                         type=int,
-                        default=512)
+                        default=2048)
     parser.add_argument('--output_dir',
                         help='Full path to model output directory. \
                             Default to ./result. Covered by --checkpoint. ',
@@ -556,8 +708,8 @@ def get_arg_parser():
                         help='Learning rate for linear model',
                         type=float,
                         default=0.2)
-    parser.add_argument('--learning_rate',
-                        help='Learning rate',
+    parser.add_argument('--deep_learning_rate',
+                        help='Learning rate for deep model',
                         type=float,
                         default=0.01)
     parser.add_argument('--keep_checkpoint_max',
@@ -572,6 +724,22 @@ def get_arg_parser():
                         type=str,
                         choices=['grpc', 'grpc++', 'star_server'],
                         default='grpc')
+    parser.add_argument('--inter',
+                        help='set inter op parallelism threads.',
+                        type=int,
+                        default=0)
+    parser.add_argument('--intra',
+                        help='set inter op parallelism threads.',
+                        type=int,
+                        default=0)
+    parser.add_argument('--input_layer_partitioner', \
+                        help='slice size of input layer partitioner, units MB. Default 8MB',
+                        type=int,
+                        default=8)
+    parser.add_argument('--dense_layer_partitioner', \
+                        help='slice size of dense layer partitioner, units KB. Default 16KB',
+                        type=int,
+                        default=16)
     parser.add_argument('--bf16',
                         help='enable DeepRec BF16 in deep model. Default FP32',
                         action='store_true')
@@ -584,15 +752,90 @@ def get_arg_parser():
     parser.add_argument('--smartstaged', \
                         help='Whether to enable smart staged feature of DeepRec, Default to True.',
                         type=boolean_string,
-                        default=False)
+                        default=True)
     parser.add_argument('--emb_fusion', \
                         help='Whether to enable embedding fusion, Default to True.',
                         type=boolean_string,
                         default=True)
+    parser.add_argument('--ev', \
+                        help='Whether to enable DeepRec EmbeddingVariable. Default False.',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument('--ev_elimination', \
+                        help='Feature Elimination of EmbeddingVariable Feature. Default closed.',
+                        type=str,
+                        choices=[None, 'l2', 'gstep'],
+                        default=None)
+    parser.add_argument('--ev_filter', \
+                        help='Feature Filter of EmbeddingVariable Feature. Default closed.',
+                        type=str,
+                        choices=[None, 'counter', 'cbf'],
+                        default=None)
     parser.add_argument('--op_fusion', \
                         help='Whether to enable Auto graph fusion feature. Default to True',
                         type=boolean_string,
                         default=True)
+    parser.add_argument('--micro_batch',
+                        help='Set num for Auto Mirco Batch. Default close.',
+                        type=int,
+                        default=0)  #TODO: Defautl to True
+    parser.add_argument('--adaptive_emb', \
+                        help='Whether to enable Adaptive Embedding. Default to False.',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument('--dynamic_ev', \
+                        help='Whether to enable Dynamic-dimension Embedding Variable. Default to False.',
+                        type=boolean_string,
+                        default=False)#TODO:enable
+    parser.add_argument('--incremental_ckpt', \
+                        help='Set time of save Incremental Checkpoint. Default 0 to close.',
+                        type=int,
+                        default=0)
+    parser.add_argument('--workqueue', \
+                        help='Whether to enable Work Queue. Default to False.',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument("--parquet_dataset", \
+                        help='Whether to enable Parquet DataSet. Defualt to True.',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument("--parquet_dataset_shuffle", \
+                        help='Whether to enable shuffle operation for Parquet Dataset. Default to False.',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument("--group_embedding", \
+                        help='Whether to enable Group Embedding. Defualt to None.',
+                        type=str,
+                        choices=[None, 'localized', 'collective'],
+                        default=None)
+    parser.add_argument('--emb_dir',
+                        help='Full path to store embeddings on SSD',
+                        required=False,
+                        default='./temp_emb')
+    parser.add_argument('--storage_type',
+                        type=str,
+                        choices=['DRAM', 'DRAM_SSDHASH', 'DRAM_LEVELDB'],
+                        default='DRAM')
+    parser.add_argument('--emb_dim',
+                        help='Embedding dimension',
+                        type=int,
+                        default=128)
+    parser.add_argument('--profiling',
+                        help='',
+                        type=str,
+                        choices=['NONE', 'AET'],
+                        default='NONE')
+    parser.add_argument('--cache_strategy',
+                        help='',
+                        type=str,
+                        choices=['LRU', 'LFU', 'B16LRU', 'B16LFU', 'B32LRU', 'B32LFU', 'B48LRU', 'B48LFU'],
+                        default='B32LFU')
+    parser.add_argument('--cache_sizes',
+                        help='Cache Capacities (MB). Provide multiple values as a list.',
+                        type=int,
+                        nargs='+',
+                        default=[256])
+
     return parser
 
 
@@ -656,11 +899,11 @@ def generate_cluster_info(TF_CONFIG):
 # A triple quotes comment is used to introduce these features and play an emphasizing role.
 def set_env_for_DeepRec():
     '''
-    Set some ENV for these DeepRec's features enabled by ENV. 
+    Set some ENV for these DeepRec's features enabled by ENV.
     More Detail information is shown in https://deeprec.readthedocs.io/zh/latest/index.html.
     START_STATISTIC_STEP & STOP_STATISTIC_STEP: On CPU platform, DeepRec supports memory optimization
-        in both stand-alone and distributed trainging. It's default to open, and the 
-        default start and stop steps of collection is 1000 and 1100. Reduce the initial 
+        in both stand-alone and distributed trainging. It's default to open, and the
+        default start and stop steps of collection is 1000 and 1100. Reduce the initial
         cold start time by the following settings.
     MALLOC_CONF: On CPU platform, DeepRec can use memory optimization with the jemalloc library.
         Please preload libjemalloc.so by `LD_PRELOAD=./libjemalloc.so.2 python ...`
@@ -669,8 +912,15 @@ def set_env_for_DeepRec():
     os.environ['STOP_STATISTIC_STEP'] = '110'
     os.environ['MALLOC_CONF']= \
         'background_thread:true,metadata_thp:auto,dirty_decay_ms:20000,muzzy_decay_ms:20000'
-    os.environ['ENABLE_MEMORY_OPTIMIZATION'] = '0'
-
+    if args.group_embedding == "collective":
+        tf.config.experimental.enable_distributed_strategy(strategy="collective")
+        if args.smartstaged and not args.tf:
+            os.environ["TF_GPU_THREAD_COUNT"] = "16"
+    os.environ['TF_EMBEDDING_FBJ_OPT'] = 'False'
+    os.environ['TF_SSDHASH_ASYNC_COMPACTION'] = 'False'
+    os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
+    os.environ['TF_SSDHASH_IO_SCHEME'] = 'directio' # directio, mmap_and_madvise
+    os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
 
 if __name__ == '__main__':
     parser = get_arg_parser()
@@ -684,4 +934,5 @@ if __name__ == '__main__':
         main()
     else:
         tf_config, server, tf_device = generate_cluster_info(TF_CONFIG)
-        main(tf_config, server)
+        with tf_device:
+            main(tf_config, server)

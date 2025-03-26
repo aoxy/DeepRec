@@ -439,7 +439,7 @@ def main(tf_config=None, server=None):
     if (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_test_examples = sum(1 for line in open(test_file))
+    no_of_test_examples = 600000 # sum(1 for line in open(test_file))
 
     # set batch size, eporch & steps
     batch_size = args.batch_size

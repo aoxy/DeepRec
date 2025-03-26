@@ -10,6 +10,8 @@ from tensorflow.python.client import timeline
 import json
 
 from tensorflow.python.ops import partitioned_variables
+from tensorflow.python.feature_column import feature_column_v2
+from tensorflow.core.framework.embedding import config_pb2
 
 result_dir='/tmp/tianchi/result/MMoE/'
 result_path=result_dir+'result'
@@ -88,7 +90,29 @@ EMBEDDING_REGULARIZATION = 5e-05
 
 EXPERTS_COUNT = 4
 EXPERT_HIDDEN_UNITS = [256, 192, 128, 64]
-EMBEDDING_DIM = 16
+EMBEDDING_DIM = None
+
+StorageTypeDict = {
+    'DRAM': config_pb2.StorageType.DRAM,
+    'DRAM_SSDHASH': config_pb2.StorageType.DRAM_SSDHASH,
+    'DRAM_LEVELDB': config_pb2.StorageType.DRAM_LEVELDB,
+}
+
+ProfilingStrategyDict = {
+    'NONE': config_pb2.ProfilingStrategy.NONE,
+    'AET': config_pb2.ProfilingStrategy.AET,
+}
+
+CacheStrategyDict = {
+    'LRU': config_pb2.CacheStrategy.LRU,
+    'LFU': config_pb2.CacheStrategy.LFU,
+    'B16LRU': config_pb2.CacheStrategy.B16LRU,
+    'B16LFU': config_pb2.CacheStrategy.B16LFU,
+    'B32LRU': config_pb2.CacheStrategy.B32LRU,
+    'B32LFU': config_pb2.CacheStrategy.B32LFU,
+    'B48LRU': config_pb2.CacheStrategy.B48LRU,
+    'B48LFU': config_pb2.CacheStrategy.B48LFU,
+}
 
 #Tower tuple structure (tower name, label name, hidden units)
 TOWERS = [
@@ -346,6 +370,18 @@ def build_model_input(filename, batch_size, num_epochs):
 # generate feature columns
 def build_feature_cols():
     feature_cols = []
+
+    EMBEDDING_DIM = args.emb_dim
+    os.makedirs(args.emb_dir, exist_ok=True)
+
+    if len(args.cache_sizes) == 1:
+        cache_sizes_list = [int(args.cache_sizes[0]) for _ in HASH_INPUTS]
+    elif len(args.cache_sizes) == len(HASH_INPUTS):
+        cache_sizes_list = [int(x) for x in args.cache_sizes]
+    else:
+        print("Invalid cache_sizes:", args.cache_sizes)
+        exit(-1)
+
     for column_name in ALL_FEATURE_COLUMNS:
         if column_name in NOT_USED_CATEGORY:
             continue
@@ -356,53 +392,18 @@ def build_feature_cols():
                 hash_bucket_size=HASH_BUCKET_SIZES[column_name],
                 dtype=tf.string)
             
-            if not args.tf:
-                '''Feature Elimination of EmbeddingVariable Feature'''
-                if args.ev_elimination == 'gstep':
-                    # Feature elimination based on global steps
-                    evict_opt = tf.GlobalStepEvict(steps_to_live=4000)
-                elif args.ev_elimination == 'l2':
-                    # Feature elimination based on l2 weight
-                    evict_opt = tf.L2WeightEvict(l2_weigt_threshold=1.0)
-                else:
-                    evict_opt = None
-                '''Feature Filter of EmbeddingVariable Feature'''
-                if args.ev_filter == 'cbf':
-                    # CBF-based feature filter
-                    filter_option = tf.CBFFilter(
-                        filter_freq=3,
-                        max_element_size=2**30,
-                        false_positive_probability=0.01,
-                        counter_type=tf.int64)
-                elif args.ev_filter == 'counter':
-                    # Counter-based feature filter
-                    filter_option = tf.CounterFilter(filter_freq=3)
-                else:
-                    filter_option = None
-                ev_opt = tf.EmbeddingVariableOption(
-                    evict_option=evict_opt, filter_option=filter_option)
+            cache_size = cache_sizes_list[HASH_INPUTS.index(column_name)]
+            if cache_size > 0:
+                storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                                            storage_path=f"{args.emb_dir}/{column_name}",
+                                            storage_size=[1024 * 1024 * cache_size],
+                                            cache_strategy = CacheStrategyDict[args.cache_strategy],
+                                            profiling_strategy = ProfilingStrategyDict[args.profiling])
 
-                if args.ev:
-                    '''Embedding Variable Feature'''
-                    categorical_column = tf.feature_column.categorical_column_with_embedding(
-                        column_name, dtype=tf.string, ev_option=ev_opt)
-                elif args.adaptive_emb:
-                    '''                 Adaptive Embedding Feature Part 2 of 2
-                    Expcet the follow code, a dict, 'adaptive_mask_tensors', is need as the input of 
-                    'tf.feature_column.input_layer(adaptive_mask_tensors=adaptive_mask_tensors)'.
-                    For column 'COL_NAME',the value of adaptive_mask_tensors['$COL_NAME'] is a int32
-                    tensor with shape [batch_size].
-                    '''
+                ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
+                tf.logging.info(f'[Feature {column_name}] Use {args.storage_type}, {args.cache_strategy}, {args.profiling}, Cache Capacity {cache_size}MB')
+                categorical_column = feature_column_v2.categorical_column_with_embedding(column_name, dtype=tf.string, ev_option=ev_opt)
 
-                    categorical_column = tf.feature_column.categorical_column_with_adaptive_embedding(
-                        column_name,
-                        hash_bucket_size=HASH_BUCKET_SIZES[column_name],
-                        dtype=tf.string,
-                        ev_option=ev_opt)
-                elif args.dynamic_ev:
-                    '''Dynamic-dimension Embedding Variable'''
-                    print("Dynamin-dimension Embedding Variable isn't really enabled in model.")
-                    sys.exit()
             
             if args.tf or not args.emb_fusion:
                 embedding_column = tf.feature_column.embedding_column(
@@ -538,8 +539,8 @@ def main(tf_config=None, server=None):
     if (not os.path.exists(train_file)) or (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_training_examples = sum(1 for line in open(train_file))
-    no_of_test_examples = sum(1 for line in open(test_file))
+    no_of_training_examples = 50000 # sum(1 for line in open(train_file))
+    no_of_test_examples = 10000 # sum(1 for line in open(test_file))
     print("Number of training dataset is {}".format(no_of_training_examples))
     print("Number of test dataset is {}".format(no_of_test_examples))
 
@@ -549,7 +550,7 @@ def main(tf_config=None, server=None):
     ) if args.micro_batch and not args.tf else args.batch_size
 
     if args.steps == 0:
-        no_of_epochs = 1000
+        no_of_epochs = 100
         train_steps = math.ceil(
             (float(no_of_epochs) * no_of_training_examples) / batch_size)
     else:
@@ -628,8 +629,11 @@ def main(tf_config=None, server=None):
                  dense_layer_partitioner=dense_layer_partitioner)
 
     # run model training and evalutaion
+    start_time = time.perf_counter()
     train(sess_config, hooks, model, train_init_op, train_steps,
           checkpoint_dir, tf_config, server)
+    end_time = time.perf_counter()
+    print("Train TimeCost =", end_time - start_time, "sec")
     if not (args.no_eval or tf_config):
         eval(sess_config, hooks, model, test_init_op, test_steps,
              checkpoint_dir)
@@ -649,7 +653,7 @@ def get_arg_parser():
     parser.add_argument('--data_location',
                         help='Full path of train data',
                         required=False,
-                        default='./data')
+                        default='/home/code/tinytaobao')
     parser.add_argument('--steps',
                         help='set the number of steps on train dataset',
                         type=int,
@@ -771,6 +775,33 @@ def get_arg_parser():
                         help='Whether to enable Work Queue. Default to False.',
                         type=boolean_string,
                         default=False)
+    parser.add_argument('--emb_dir',
+                        help='Full path to store embeddings on SSD',
+                        required=False,
+                        default='./temp_emb')
+    parser.add_argument('--storage_type',
+                        type=str,
+                        choices=['DRAM', 'DRAM_SSDHASH', 'DRAM_LEVELDB'],
+                        default='DRAM')
+    parser.add_argument('--emb_dim',
+                        help='Embedding dimension',
+                        type=int,
+                        default=128)
+    parser.add_argument('--profiling',
+                        help='',
+                        type=str,
+                        choices=['NONE', 'AET'],
+                        default='NONE')
+    parser.add_argument('--cache_strategy',
+                        help='',
+                        type=str,
+                        choices=['LRU', 'LFU', 'B16LRU', 'B16LFU', 'B32LRU', 'B32LFU', 'B48LRU', 'B48LFU'],
+                        default='B32LFU')
+    parser.add_argument('--cache_sizes',
+                        help='Cache Capacities (MB). Provide multiple values as a list.',
+                        type=int,
+                        nargs='+',
+                        default=[256])
     return parser
 
 # parse distributed training configuration and generate cluster information
@@ -843,6 +874,11 @@ def set_env_for_DeepRec():
     os.environ['MALLOC_CONF']= \
         'background_thread:true,metadata_thp:auto,dirty_decay_ms:20000,muzzy_decay_ms:20000'
     os.environ['ENABLE_MEMORY_OPTIMIZATION'] = '0'
+    os.environ['TF_EMBEDDING_FBJ_OPT'] = 'False'
+    os.environ['TF_SSDHASH_ASYNC_COMPACTION'] = 'False'
+    os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
+    os.environ['TF_SSDHASH_IO_SCHEME'] = 'directio' # directio, mmap_and_madvise
+    os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
 
 def check_stock_tf():
     import pkg_resources
