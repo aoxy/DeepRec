@@ -100,6 +100,23 @@ CacheStrategyDict = {
     'B48LFU': config_pb2.CacheStrategy.B48LFU,
 }
 
+TABEL_SIZES = {
+    "district_id" : (2557, 1536),
+    "times" : (82589, 1536),
+    "timediff_list" : (4987656, 1536),
+    "user_id" : (1343323, 1536),
+}
+
+def get_cache_factors(table):
+    all_sizes = {k: c * s for k, (c, s) in table.items()}
+    tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
+    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 1343323}
+    total = sum(filtered_items.values())
+    result = {}
+    if total > 0:
+        result = {k: round(v / total, 4) for k, v in filtered_items.items()}
+    return result
+
 
 class DLRM():
 
@@ -372,11 +389,14 @@ def build_feature_columns():
         print("Invalid cache_sizes:", args.cache_sizes)
         exit(-1)
 
-    for column, cache_size in zip(EMBEDDING_COLS, cache_sizes_list):
+    cache_factors = get_cache_factors(TABEL_SIZES)
+
+    for column in EMBEDDING_COLS:
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
         
-        if cache_size > 0:
+        cache_size = cache_factors.get(column, 0) * cache_sizes_list[0]
+        if cache_size > 0 or args.storage_type == 'DRAM':
             storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
                                         storage_path=f"{args.emb_dir}/{column}",
                                         storage_size=[1024 * 1024 * cache_size],
@@ -531,14 +551,23 @@ def main(tf_config=None, server=None):
 
     # create data pipline of train & test dataset
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-    test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                               test_dataset.output_shapes)
+    if not (args.no_eval or tf_config):
+        test_dataset = build_model_input(test_file, batch_size, 1)
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            test_dataset.output_shapes
+        )
+        test_init_op = iterator.make_initializer(test_dataset)
+    else:
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            train_dataset.output_shapes
+        )
+        test_init_op = None
+
     next_element = iterator.get_next()
-
     train_init_op = iterator.make_initializer(train_dataset)
-    test_init_op = iterator.make_initializer(test_dataset)
 
     # create feature column
     dense_column, sparse_column = build_feature_columns()

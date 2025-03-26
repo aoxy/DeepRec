@@ -114,6 +114,45 @@ CacheStrategyDict = {
     'B48LFU': config_pb2.CacheStrategy.B48LFU,
 }
 
+TABEL_SIZES = {
+    "C25" : (91, 768),
+    "C13" : (3128, 768),
+    "C3" : (2110015, 1536),
+    "C12" : (1776949, 1536),
+    "C20" : (4, 768),
+    "C24" : (121464, 1536),
+    "C18" : (4925, 768),
+    "C7" : (11996, 768),
+    "C23" : (15, 768),
+    "C1" : (1396, 768),
+    "C15" : (12463, 768),
+    "C10" : (61411, 1536),
+    "C6" : (22, 768),
+    "C8" : (608, 768),
+    "C14" : (26, 768),
+    "C21" : (1550831, 1536),
+    "C17" : (10, 768),
+    "C22" : (17, 768),
+    "C2" : (552, 768),
+    "C19" : (2093, 768),
+    "C4" : (586007, 1536),
+    "C5" : (290, 768),
+    "C9" : (3, 768),
+    "C11" : (5265, 768),
+    "C26" : (77735, 1536),
+    "C16" : (1258743, 1536),
+}
+
+def get_cache_factors(table):
+    all_sizes = {k: c * s for k, (c, s) in table.items()}
+    tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
+    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 586007}
+    total = sum(filtered_items.values())
+    result = {}
+    if total > 0:
+        result = {k: round(v / total, 4) for k, v in filtered_items.items()}
+    return result
+
 
 class WDL():
     def __init__(self,
@@ -401,6 +440,8 @@ def build_feature_columns():
     else:
         print("Invalid cache_sizes:", args.cache_sizes)
         exit(-1)
+
+    cache_factors = get_cache_factors(TABEL_SIZES)
     
     for column_name in FEATURE_COLUMNS:
         if column_name in CATEGORICAL_COLUMNS:
@@ -408,8 +449,8 @@ def build_feature_columns():
                 column_name, hash_bucket_size=10000, dtype=tf.string)
             wide_columns.append(categorical_column)
 
-            cache_size = cache_sizes_list[CATEGORICAL_COLUMNS.index(column_name)]
-            if cache_size > 0:
+            cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
+            if cache_size > 0 or args.storage_type == 'DRAM':
                 storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
                                             storage_path=f"{args.emb_dir}/{column_name}",
                                             storage_size=[1024 * 1024 * cache_size],
@@ -552,8 +593,8 @@ def main(tf_config=None, server=None):
         no_of_training_examples = pq.read_table(train_file).num_rows
         no_of_test_examples = pq.read_table(test_file).num_rows
     else:
-        no_of_training_examples = sum(1 for line in open(train_file))
-        no_of_test_examples = sum(1 for line in open(test_file))
+        no_of_training_examples = 8000000 # sum(1 for line in open(train_file))
+        no_of_test_examples = 2000000 # sum(1 for line in open(test_file))
     print("Numbers of training dataset is {}".format(no_of_training_examples))
     print("Numbers of test dataset is {}".format(no_of_test_examples))
 
@@ -585,16 +626,23 @@ def main(tf_config=None, server=None):
 
     # create data pipline of train & test dataset
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-    test_dataset = build_model_input(test_file, batch_size, 1)
 
-    dataset_output_types = tf.data.get_output_types(train_dataset)
-    dataset_output_shapes = tf.data.get_output_shapes(test_dataset)
-    iterator = tf.data.Iterator.from_structure(dataset_output_types,
-                                               dataset_output_shapes)
+    if not (args.no_eval or tf_config):
+        test_dataset = build_model_input(test_file, batch_size, 1)
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            test_dataset.output_shapes
+        )
+        test_init_op = iterator.make_initializer(test_dataset)
+    else:
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            train_dataset.output_shapes
+        )
+        test_init_op = None
+
     next_element = iterator.get_next()
-
     train_init_op = iterator.make_initializer(train_dataset)
-    test_init_op = iterator.make_initializer(test_dataset)
 
     # create feature column
     wide_column, deep_column = build_feature_columns()

@@ -71,6 +71,10 @@ CacheStrategyDict = {
     'B48LFU': config_pb2.CacheStrategy.B48LFU,
 }
 
+TABEL_SIZES = {
+    "uid_emb_column" : (2682416, 240),
+}
+
 
 class VecAttGRUCell(tf.nn.rnn_cell.RNNCell):
     def __init__(self,
@@ -711,12 +715,15 @@ def build_feature_columns(data_location=None):
         else:
             filter_option = None
 
-        if args.cache_size > 0:
+        all_sizes = {k: c * s for k, (c, s) in TABEL_SIZES.items()}
+        tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
+
+        if args.cache_sizes > 0 or args.storage_type == 'DRAM':
             storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
                                         storage_path=f"{args.emb_dir}/uid_emb_column",
-                                        storage_size=[1024 * 1024 * args.cache_size],
+                                        storage_size=[1024 * 1024 * args.cache_sizes],
                                         cache_strategy = CacheStrategyDict[args.cache_strategy])
-            tf.logging.info(f'[Feature uid_emb_column] Use {args.storage_type}, {args.cache_strategy}, Cache Capacity {args.cache_size}MB')
+            tf.logging.info(f'[Feature uid_emb_column] Use {args.storage_type}, {args.cache_strategy}, Cache Capacity {args.cache_sizes}MB')
         else:
             storage_option = None
         ev_opt = tf.EmbeddingVariableOption(evict_option=evict_opt,
@@ -892,14 +899,23 @@ def main(tf_config=None, server=None):
 
     # create data pipline of train & test dataset
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-    test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                               test_dataset.output_shapes)
+    if not (args.no_eval or tf_config):
+        test_dataset = build_model_input(test_file, batch_size, 1)
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            test_dataset.output_shapes
+        )
+        test_init_op = iterator.make_initializer(test_dataset)
+    else:
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            train_dataset.output_shapes
+        )
+        test_init_op = None
+
     next_element = iterator.get_next()
-
     train_init_op = iterator.make_initializer(train_dataset)
-    test_init_op = iterator.make_initializer(test_dataset)
 
     # create feature column
     feature_column, ev_opt = build_feature_columns(args.data_location)
@@ -1124,7 +1140,7 @@ def get_arg_parser():
                         type=str,
                         choices=['LRU', 'LFU', 'B16LRU', 'B16LFU', 'B32LRU', 'B32LFU', 'B48LRU', 'B48LFU'],
                         default='B32LFU')
-    parser.add_argument('--cache_size',
+    parser.add_argument('--cache_sizes',
                         help='Cache Capacities (MB).',
                         type=int,
                         default=256)

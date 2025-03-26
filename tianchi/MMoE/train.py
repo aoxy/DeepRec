@@ -109,6 +109,35 @@ CacheStrategyDict = {
     'B48LFU': config_pb2.CacheStrategy.B48LFU,
 }
 
+TABEL_SIZES = {
+    "adgroup_id" : (34805, 3072),
+    "tag_category_list" : (3263, 3072),
+    "customer" : (24661, 3072),
+    "occupation" : (3, 3072),
+    "new_user_class_level" : (5, 3072),
+    "cms_group_id" : (14, 3072),
+    "brand" : (13892, 3072),
+    "tag_brand_list" : (19480, 3072),
+    "cate_id" : (2513, 3072),
+    "user_id" : (42963, 3072),
+    "shopping_level" : (4, 3072),
+    "pvalue_level" : (4, 3072),
+    "pid" : (2, 3072),
+    "campaign_id" : (30039, 3072),
+    "age_level" : (8, 3072),
+    "cms_segid" : (96, 3072),
+}
+
+def get_cache_factors(table):
+    all_sizes = {k: c * s for k, (c, s) in table.items()}
+    tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
+    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 13892}
+    total = sum(filtered_items.values())
+    result = {}
+    if total > 0:
+        result = {k: round(v / total, 4) for k, v in filtered_items.items()}
+    return result
+
 #Tower tuple structure (tower name, label name, hidden units)
 TOWERS = [
     ("ctr", "clk", [256, 192, 128, 64]),
@@ -368,6 +397,7 @@ def build_feature_cols():
 
     EMBEDDING_DIM = args.emb_dim
     os.makedirs(args.emb_dir, exist_ok=True)
+    cache_factors = get_cache_factors(TABEL_SIZES)
 
     if len(args.cache_sizes) == 1:
         cache_sizes_list = [int(args.cache_sizes[0]) for _ in HASH_INPUTS]
@@ -387,8 +417,8 @@ def build_feature_cols():
                 hash_bucket_size=HASH_BUCKET_SIZES[column_name],
                 dtype=tf.string)
             
-            cache_size = cache_sizes_list[HASH_INPUTS.index(column_name)]
-            if cache_size > 0:
+            cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
+            if cache_size > 0 or args.storage_type == 'DRAM':
                 storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
                                             storage_path=f"{args.emb_dir}/{column_name}",
                                             storage_size=[1024 * 1024 * cache_size],
@@ -566,14 +596,23 @@ def main(tf_config=None, server=None):
 
     # create data pipeline of train & test dataset
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-    test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                               test_dataset.output_shapes)
+    if not (args.no_eval or tf_config):
+        test_dataset = build_model_input(test_file, batch_size, 1)
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            test_dataset.output_shapes
+        )
+        test_init_op = iterator.make_initializer(test_dataset)
+    else:
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            train_dataset.output_shapes
+        )
+        test_init_op = None
+
     next_element = iterator.get_next()
-
     train_init_op = iterator.make_initializer(train_dataset)
-    test_init_op = iterator.make_initializer(test_dataset)
 
     # create future column
     feature_cols = build_feature_cols()
@@ -781,7 +820,7 @@ def get_arg_parser():
     parser.add_argument('--emb_dim',
                         help='Embedding dimension',
                         type=int,
-                        default=128)
+                        default=256)
     parser.add_argument('--cache_strategy',
                         help='',
                         type=str,

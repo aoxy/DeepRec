@@ -1,3 +1,4 @@
+cd /home/code/aoxy/DeepRec/
 export BAZEL_JAVAC_OPTS="-J-Xmx12g"
 
 bazel build -c opt --config=opt //tensorflow/tools/pip_package:build_pip_package --local_ram_resources=12288 --local_cpu_resources=4
