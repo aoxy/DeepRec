@@ -41,9 +41,9 @@ cd /home/code/aoxy/DeepRec/tianchi/$model_name/
 
 declare -A MODEL_CONFIG=(
     [DLRM]="2500"
-    [MMoE]="200"
-    [WDL]="2500"
-    [DIEN]="200"
+    [MMoE]="90"
+    [WDL]="2000"
+    [DIEN]="100"
 )
 
 cache_sizes_ls=(${MODEL_CONFIG["${model_name:-DLRM}"]})

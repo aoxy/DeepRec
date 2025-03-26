@@ -34,9 +34,9 @@ namespace tensorflow {
 namespace embedding {
 typedef uint32 EmbPosition;
 
-const uint32 kEmbPositionVersionMod = 0b111111111111;
-const uint32 kEmbPositionVersionMask = 0b11111111111100000000000000000000;
-const uint32 kEmbPositionOffsetMask  = 0b00000000000011111111111111111100; // support dim >= 42
+const uint32 kEmbPositionVersionMod  = 0b11111111111;
+const uint32 kEmbPositionVersionMask = 0b11111111111000000000000000000000;
+const uint32 kEmbPositionOffsetMask  = 0b00000000000111111111111111111100;
 const uint32 kEmbPositionInvalidMask = 0b00000000000000000000000000000010;
 const uint32 kEmbPositionFlushedMask = 0b00000000000000000000000000000001;
 
@@ -220,7 +220,7 @@ class SSDHashKV : public KVInterface<K, V> {
   void Init() {
     val_len_ = feat_desc_->data_bytes();
     file_capacity_ = BUFFER_SIZE / val_len_;
-    if (file_capacity_ >= (1 << 18)) {
+    if (file_capacity_ > (1 << 19)) {
       LOG(FATAL) << "The 18-bit offset is not enough to save the Embedding of length " << val_len_ << " in the SSD KV.";
     }
     write_buffer_ = new char[BUFFER_SIZE];

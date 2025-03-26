@@ -1,3 +1,9 @@
+
+docker stop axynetp
+docker update --memory "160g" --memory-swap "170g" axynetp
+docker start axynetp
+docker exec axynetp /bin/bash -c "/home/code/aoxy/DeepRec/reinstall_deeprc.sh"
+
 swapon -s
 swapoff -a
 swapon /home/axy/code/swapfile
