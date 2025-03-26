@@ -35,8 +35,8 @@ warm_up() {
 
 cd /home/code/aoxy/DeepRec/tianchi/$model_name/
 
-warm_up
-echo "Warm Up done."
+# warm_up
+# echo "Warm Up done."
 
 declare -A MODEL_CONFIG=(
     [DLRM]="2500 3500 4000 4500 5000 5500 6000 6500"
