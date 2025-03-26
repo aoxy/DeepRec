@@ -1,3 +1,4 @@
+cd /home/code/aoxy/DeepRec/
 bazel build -c opt --config=opt //tensorflow/tools/pip_package:build_pip_package
 if [ $? -eq 0 ]; then
     rm -rf /tmp/tensorflow_pkg

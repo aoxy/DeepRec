@@ -143,11 +143,18 @@ class MultiTierStorage : public Storage<K, V> {
       return;
     int cache_count = cache_->size();
     cache_capacity_ = cache_->get_capacity();
-    int k_size = cache_count - cache_capacity_;
-    if (k_size > MinEvictionSize) {
-      k_size = std::min(k_size, EvictionSize);
-      size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
-      EvictionWithDelayedDestroy(evic_ids, true_size);
+    while (cache_count > cache_capacity_) {
+      int k_size = cache_count - cache_capacity_;
+      if (k_size >= MinEvictionSize) {
+        k_size = std::min(k_size, EvictionSize);
+        size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
+        EvictionWithDelayedDestroy(evic_ids, true_size);
+        if (true_size == 0) break;
+      } else {
+        break;
+      }
+      cache_count = cache_->size();
+      cache_capacity_ = cache_->get_capacity();
     }
   }
 

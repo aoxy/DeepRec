@@ -28,6 +28,8 @@ from tensorflow.python.ops import partitioned_variables
 from tensorflow.contrib.rnn.python.ops.core_rnn_cell import _Linear
 from tensorflow.python.feature_column.feature_column import _LazyBuilder
 from tensorflow.python.feature_column import utils as fc_utils
+from tensorflow.python.feature_column import feature_column_v2
+from tensorflow.core.framework.embedding import config_pb2
 
 result_dir='/tmp/tianchi/result/DIEN/'
 result_path=result_dir+'result'
@@ -47,9 +49,27 @@ LABEL_COLUMN = ['CLICKED']
 TRAIN_DATA_COLUMNS = LABEL_COLUMN + UNSEQ_COLUMNS + SEQ_COLUMNS
 
 EMBEDDING_DIM = 18
-HIDDEN_SIZE = 18 * 2
-ATTENTION_SIZE = 18 * 2
+HIDDEN_SIZE = EMBEDDING_DIM * 2
+ATTENTION_SIZE = EMBEDDING_DIM * 2
 MAX_SEQ_LENGTH = 50
+
+StorageTypeDict = {
+    'DRAM': config_pb2.StorageType.DRAM,
+    'DRAM_SSDHASH': config_pb2.StorageType.DRAM_SSDHASH,
+    'DRAM_LEVELDB': config_pb2.StorageType.DRAM_LEVELDB,
+}
+
+
+CacheStrategyDict = {
+    'LRU': config_pb2.CacheStrategy.LRU,
+    'LFU': config_pb2.CacheStrategy.LFU,
+    'B16LRU': config_pb2.CacheStrategy.B16LRU,
+    'B16LFU': config_pb2.CacheStrategy.B16LFU,
+    'B32LRU': config_pb2.CacheStrategy.B32LRU,
+    'B32LFU': config_pb2.CacheStrategy.B32LFU,
+    'B48LRU': config_pb2.CacheStrategy.B48LRU,
+    'B48LFU': config_pb2.CacheStrategy.B48LFU,
+}
 
 
 class VecAttGRUCell(tf.nn.rnn_cell.RNNCell):
@@ -667,6 +687,7 @@ def build_feature_columns(data_location=None):
     uid_cate_column = tf.feature_column.categorical_column_with_vocabulary_file(
         'UID', uid_file, default_value=0)
     ev_opt = None
+    # EMBEDDING_DIM = args.emb_dim
     if not args.tf:
         '''Feature Elimination of EmbeddingVariable Feature'''
         if args.ev_elimination == 'gstep':
@@ -689,31 +710,20 @@ def build_feature_columns(data_location=None):
             filter_option = tf.CounterFilter(filter_freq=3)
         else:
             filter_option = None
-        ev_opt = tf.EmbeddingVariableOption(evict_option=evict_opt,
-                                            filter_option=filter_option)
 
-        if args.ev:
-            '''Embedding Variable Feature with feature_column API'''
-            uid_cate_column = tf.feature_column.categorical_column_with_embedding(
-                'UID', dtype=tf.string, ev_option=ev_opt)
-        elif args.adaptive_emb:
-            '''            Adaptive Embedding Feature Part 2 of 2
-            Expcet the follow code, a dict, 'adaptive_mask_tensors', is need as the input of 
-            'tf.feature_column.input_layer(adaptive_mask_tensors=adaptive_mask_tensors)'.
-            For column 'COL_NAME',the value of adaptive_mask_tensors['$COL_NAME'] is a int32
-            tensor with shape [batch_size].
-            '''
-            uid_cate_column = tf.feature_column.categorical_column_with_adaptive_embedding(
-                'UID',
-                hash_bucket_size=100000,
-                dtype=tf.string,
-                ev_option=ev_opt)
-        elif args.dynamic_ev:
-            '''Dynamic-dimension Embedding Variable'''
-            print(
-                "Dynamic-dimension Embedding Variable isn't really enabled in model now."
-            )
-            sys.exit()
+        if args.cache_size > 0:
+            storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                                        storage_path=f"{args.emb_dir}/uid_emb_column",
+                                        storage_size=[1024 * 1024 * args.cache_size],
+                                        cache_strategy = CacheStrategyDict[args.cache_strategy])
+            tf.logging.info(f'[Feature uid_emb_column] Use {args.storage_type}, {args.cache_strategy}, Cache Capacity {args.cache_size}MB')
+        else:
+            storage_option = None
+        ev_opt = tf.EmbeddingVariableOption(evict_option=evict_opt,
+                                            filter_option=filter_option,
+                                            storage_option=storage_option)
+        uid_cate_column = feature_column_v2.categorical_column_with_embedding('UID', dtype=tf.string, ev_option=ev_opt)
+
 
     uid_emb_column = tf.feature_column.embedding_column(
         uid_cate_column, dimension=EMBEDDING_DIM)
@@ -849,8 +859,8 @@ def main(tf_config=None, server=None):
                 not os.path.exists(test_file + '_neg')):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_training_examples = sum(1 for line in open(train_file))
-    no_of_test_examples = sum(1 for line in open(test_file))
+    no_of_training_examples = 5364832 # sum(1 for line in open(train_file))
+    no_of_test_examples = 598836 # sum(1 for line in open(test_file))
     print("Numbers of training dataset is {}".format(no_of_training_examples))
     print("Numbers of test dataset is {}".format(no_of_test_examples))
 
@@ -947,15 +957,20 @@ def main(tf_config=None, server=None):
                  dense_layer_partitioner=dense_layer_partitioner)
 
     # Run model training and evaluation
+    start_time = time.perf_counter()
     train(sess_config, hooks, model, train_init_op, train_steps,
           checkpoint_dir, tf_config, server)
+    end_time = time.perf_counter()
+    print("Train TimeCost =", end_time - start_time, "sec")
     if not (args.no_eval or tf_config):
+        os.environ['INFERENCE_MODE'] = 'True'
         eval(sess_config, hooks, model, test_init_op, test_steps,
              checkpoint_dir)
-    os.makedirs(result_dir, exist_ok=True)
-    with open(result_path, 'w') as f:
-        f.write(str(global_time_cost)+'\n')
-        f.write(str(global_auc)+'\n')
+        eval_time = time.perf_counter()
+        print("Eval TimeCost =", eval_time - end_time, "sec")
+    print("global_time_cost =", global_time_cost)
+    print("global_auc =", global_auc)
+
 
 
 def boolean_string(string):
@@ -971,7 +986,7 @@ def get_arg_parser():
     parser.add_argument('--data_location',
                         help='Full path of train data',
                         required=False,
-                        default='./data')
+                        default='/home/code/amazon')
     parser.add_argument('--steps',
                         help='set the number of steps on train dataset',
                         type=int,
@@ -1092,6 +1107,27 @@ def get_arg_parser():
                         help='Whether to enable Multi-Hash Variable. Default to False.',
                         type=boolean_string,
                         default=False)#TODO
+    parser.add_argument('--emb_dir',
+                        help='Full path to store embeddings on SSD',
+                        required=False,
+                        default='./temp_emb')
+    parser.add_argument('--storage_type',
+                        type=str,
+                        choices=['DRAM', 'DRAM_SSDHASH', 'DRAM_LEVELDB'],
+                        default='DRAM')
+    parser.add_argument('--emb_dim',
+                        help='Embedding dimension',
+                        type=int,
+                        default=128)
+    parser.add_argument('--cache_strategy',
+                        help='',
+                        type=str,
+                        choices=['LRU', 'LFU', 'B16LRU', 'B16LFU', 'B32LRU', 'B32LFU', 'B48LRU', 'B48LFU'],
+                        default='B32LFU')
+    parser.add_argument('--cache_size',
+                        help='Cache Capacities (MB).',
+                        type=int,
+                        default=256)
     return parser
 
 
@@ -1169,6 +1205,11 @@ def set_env_for_DeepRec():
     os.environ['MALLOC_CONF']= \
         'background_thread:true,metadata_thp:auto,dirty_decay_ms:20000,muzzy_decay_ms:20000'
     os.environ['ENABLE_MEMORY_OPTIMIZATION'] = '0'
+    os.environ['TF_EMBEDDING_FBJ_OPT'] = 'False'
+    os.environ['TF_SSDHASH_ASYNC_COMPACTION'] = 'False'
+    os.environ['TF_CACHE_RECORD_HITRATE'] = 'True'
+    os.environ['TF_SSDHASH_IO_SCHEME'] = 'directio' # directio, mmap_and_madvise
+    os.environ['TF_ENABLE_SSDKV_COMPACTION'] = 'True'
 
 
 if __name__ == '__main__':

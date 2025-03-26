@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_EVICTION_MANAGER_H_
 #define TENSORFLOW_CORE_FRAMEWORK_EMBEDDING_EVICTION_MANAGER_H_
 
+#include <sys/resource.h>
+
 #include "tensorflow/core/util/env_var.h"
 #include "tensorflow/core/lib/core/threadpool.h"
 
@@ -103,6 +105,14 @@ class EvictionManager {
   }
 
   void EvictionLoop() {
+    int nice = getpriority(PRIO_PROCESS, 0);
+    LOG(INFO) << "Eviction Thread Priority: " << nice;
+    int res = setpriority(PRIO_PROCESS, 0, -20);
+    if (res != 0) {
+      LOG(ERROR) << "Failed to set eviction thread priority: ";
+    } else {
+      LOG(INFO) << "Setting Eviction Thread Priority to -20";
+    }
     while (CheckStorages()) {
       mutex_lock l(mu_);
       for (auto it : storage_table_) {

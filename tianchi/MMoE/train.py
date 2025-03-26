@@ -98,11 +98,6 @@ StorageTypeDict = {
     'DRAM_LEVELDB': config_pb2.StorageType.DRAM_LEVELDB,
 }
 
-ProfilingStrategyDict = {
-    'NONE': config_pb2.ProfilingStrategy.NONE,
-    'AET': config_pb2.ProfilingStrategy.AET,
-}
-
 CacheStrategyDict = {
     'LRU': config_pb2.CacheStrategy.LRU,
     'LFU': config_pb2.CacheStrategy.LFU,
@@ -397,11 +392,10 @@ def build_feature_cols():
                 storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
                                             storage_path=f"{args.emb_dir}/{column_name}",
                                             storage_size=[1024 * 1024 * cache_size],
-                                            cache_strategy = CacheStrategyDict[args.cache_strategy],
-                                            profiling_strategy = ProfilingStrategyDict[args.profiling])
+                                            cache_strategy = CacheStrategyDict[args.cache_strategy])
 
                 ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
-                tf.logging.info(f'[Feature {column_name}] Use {args.storage_type}, {args.cache_strategy}, {args.profiling}, Cache Capacity {cache_size}MB')
+                tf.logging.info(f'[Feature {column_name}] Use {args.storage_type}, {args.cache_strategy}, Cache Capacity {cache_size}MB')
                 categorical_column = feature_column_v2.categorical_column_with_embedding(column_name, dtype=tf.string, ev_option=ev_opt)
 
             
@@ -635,12 +629,13 @@ def main(tf_config=None, server=None):
     end_time = time.perf_counter()
     print("Train TimeCost =", end_time - start_time, "sec")
     if not (args.no_eval or tf_config):
+        os.environ['INFERENCE_MODE'] = 'True'
         eval(sess_config, hooks, model, test_init_op, test_steps,
              checkpoint_dir)
-    os.makedirs(result_dir, exist_ok=True)
-    with open(result_path, 'w') as f:
-        f.write(str(global_time_cost)+'\n')
-        f.write(str(global_auc)+'\n')
+        eval_time = time.perf_counter()
+        print("Eval TimeCost =", eval_time - end_time, "sec")
+    print("global_time_cost =", global_time_cost)
+    print("global_auc =", global_auc)
 
 def boolean_string(string):
     low_string = string.lower()
@@ -787,11 +782,6 @@ def get_arg_parser():
                         help='Embedding dimension',
                         type=int,
                         default=128)
-    parser.add_argument('--profiling',
-                        help='',
-                        type=str,
-                        choices=['NONE', 'AET'],
-                        default='NONE')
     parser.add_argument('--cache_strategy',
                         help='',
                         type=str,

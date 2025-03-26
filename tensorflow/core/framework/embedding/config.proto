@@ -43,13 +43,15 @@ enum CacheStrategy {
   B8LRU = 2;
   B16LRU = 3;
   B32LRU = 4;
-  B64LRU = 5;
-  LFU = 6;
-  B4LFU = 7;
-  B8LFU = 8;
-  B16LFU = 9;
-  B32LFU = 10;
-  B64LFU = 11;
+  B48LRU = 5;
+  B64LRU = 6;
+  LFU = 7;
+  B4LFU = 8;
+  B8LFU = 9;
+  B16LFU = 10;
+  B32LFU = 11;
+  B48LFU = 12;
+  B64LFU = 13;
 }
 
 enum EmbeddingVariableType {
