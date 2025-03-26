@@ -513,8 +513,8 @@ def main(tf_config=None, server=None):
     if (not os.path.exists(train_file)) or (not os.path.exists(test_file)):
         print("Dataset does not exist in the given data_location.")
         sys.exit()
-    no_of_training_examples = 2170299#sum(1 for line in open(train_file))
-    no_of_test_examples = 600000#sum(1 for line in open(test_file))
+    no_of_training_examples = 2170299 # sum(1 for line in open(train_file))
+    no_of_test_examples = 600000 # sum(1 for line in open(test_file))
     print("no_of_training_examples =", no_of_training_examples)
     print("no_of_test_examples =", no_of_test_examples)
     # no_of_training_examples = 2170299
@@ -546,14 +546,23 @@ def main(tf_config=None, server=None):
 
     # create data pipline of train & test dataset
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-    test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                               test_dataset.output_shapes)
+    if not (args.no_eval or tf_config):
+        test_dataset = build_model_input(test_file, batch_size, 1)
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            test_dataset.output_shapes
+        )
+        test_init_op = iterator.make_initializer(test_dataset)
+    else:
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            train_dataset.output_shapes
+        )
+        test_init_op = None
+
     next_element = iterator.get_next()
-
     train_init_op = iterator.make_initializer(train_dataset)
-    test_init_op = iterator.make_initializer(test_dataset)
 
     # create feature column
     dense_column, sparse_column = build_feature_columns()

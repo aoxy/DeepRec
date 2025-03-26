@@ -53,6 +53,7 @@ limitations under the License.
 #include <sys/resource.h>
 #include "tensorflow/core/framework/embedding/kv_interface.h"
 #include "tensorflow/core/framework/embedding/cache.h"
+#include "tensorflow/core/framework/embedding/storage_factory.h"
 #include "tensorflow/core/kernels/kv_variable_ops.h"
 #ifdef TENSORFLOW_USE_JEMALLOC
 #include "jemalloc/jemalloc.h"
@@ -180,7 +181,8 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
               storage_type, "/tmp/ssd_utpy/",
               storage_size,
               embedding_config,
-              cache_strategy),
+              cache_strategy,
+              ProfilingStrategy::NONE),
           cpu_allocator(),
           feat_desc,
           "emb_var");
@@ -191,7 +193,7 @@ EmbeddingVar<int64, float>* CreateMultiTierEmbeddingVar(
       cpu_allocator(),
       feat_desc);
 	ev->Init(default_value, default_value_dim);
-  ev->InitCache(cache_strategy, num_threads);
+  ev->InitCache(cache_strategy, ProfilingStrategy::NONE, num_threads);
   return ev;
 }
 

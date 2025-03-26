@@ -1,6 +1,9 @@
 #!/bin/bash
 
-# docker exec axynetp /bin/bash -c "/home/code/aoxy/DeepRec/tianchi/DLRM/run_batch.sh"
+# docker stop axynetp
+# docker start axynetp
+# docker exec axynetp /bin/bash -c "/home/code/aoxy/DeepRec/reinstall_deeprc.sh" > script_output_hitrate.log 2>&1 &
+# docker exec axynetp /bin/bash -c "/home/code/aoxy/DeepRec/tianchi/DLRM/run_batch.sh" > script_output_hitrate.log 2>&1 &
 
 record_one_train() {
     rm -rf ./result/*
@@ -19,11 +22,11 @@ mkdir -p $log_dir/train_dlrm_log
 
 storage_type="DRAM"
 cache_cap="1 1 1 1"
-record_one_train
+# record_one_train
 
 storage_type="DRAM_SSDHASH"
 cache_cap="10240 10240 10240 10240"
-record_one_train
+# record_one_train
 
 # EMBEDDING_COLS = ['user_id', 'district_id', 'times', 'timediff_list']
 # SIZE = [1343323, 2557, 82589, 4987656]

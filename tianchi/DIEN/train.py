@@ -898,14 +898,23 @@ def main(tf_config=None, server=None):
 
     # create data pipline of train & test dataset
     train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-    test_dataset = build_model_input(test_file, batch_size, 1)
 
-    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                               test_dataset.output_shapes)
+    if not (args.no_eval or tf_config):
+        test_dataset = build_model_input(test_file, batch_size, 1)
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            test_dataset.output_shapes
+        )
+        test_init_op = iterator.make_initializer(test_dataset)
+    else:
+        iterator = tf.data.Iterator.from_structure(
+            train_dataset.output_types,
+            train_dataset.output_shapes
+        )
+        test_init_op = None
+
     next_element = iterator.get_next()
-
     train_init_op = iterator.make_initializer(train_dataset)
-    test_init_op = iterator.make_initializer(test_dataset)
 
     # create feature column
     feature_column, ev_opt = build_feature_columns(args.data_location)
@@ -968,9 +977,9 @@ def main(tf_config=None, server=None):
           checkpoint_dir, tf_config, server)
     end_time = time.perf_counter()
     print("Train TimeCost =", end_time - start_time, "sec")
-    # if not (args.no_eval or tf_config):
-    #     eval(sess_config, hooks, model, test_init_op, test_steps,
-    #          checkpoint_dir)
+    if not (args.no_eval or tf_config):
+        eval(sess_config, hooks, model, test_init_op, test_steps,
+             checkpoint_dir)
     print("global_time_cost =", global_time_cost)
     print("global_auc =", global_auc)
 

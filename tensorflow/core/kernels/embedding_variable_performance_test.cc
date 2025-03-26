@@ -808,7 +808,7 @@ double PerfCacheUpdateAndEviction(
     const std::vector<std::vector<int64>>& input_batches,
     CacheStrategy cache_strategy, int64 capacity, int num_thread) {
   BatchCache<int64>* cache = CacheFactory::Create<int64>(
-      cache_strategy, "cccache", capacity, num_thread);
+      cache_strategy, ProfilingStrategy::NONE, "cccache", capacity, num_thread);
   google::dense_hash_map_lockless<int64, size_t> hmap;
   hmap.max_load_factor(0.8);
   hmap.set_empty_key_and_value(-1, 0);
@@ -929,12 +929,9 @@ void TestCacheUpdateAndEvictionTable() {
   LOG(INFO) << "Cache capacity = " << capacity << " ("
             << capacity * 100 / uids.size() << "%)";
 
-  std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
+  std::vector<int> num_thread_vec({1, 2, 4, 8, 16, 24, 32, 40, 48});
   std::vector<CacheStrategy> cache_strategy_vec(
-      {CacheStrategy::LRU, CacheStrategy::LFU, CacheStrategy::B8LRU,
-       CacheStrategy::B8LFU, CacheStrategy::B16LRU,
-       CacheStrategy::B16LFU, CacheStrategy::B32LRU,
-       CacheStrategy::B32LFU});
+      {CacheStrategy::LRU, CacheStrategy::LFU});
   for (auto num_thread : num_thread_vec) {
     for (auto cache_strategy : cache_strategy_vec) {
       double exec_time = PerfCacheUpdateAndEviction(
