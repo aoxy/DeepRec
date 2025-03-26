@@ -84,6 +84,7 @@ class SingleTierStorage : public Storage<K, V> {
     mutex_lock l(Storage<K, V>::mu_);
     std::vector<K> key_list;
     std::vector<void*> value_ptr_list;
+    VLOG(0) << "LocklessHashMap Size = " << kv_->Size() << "    Path = " << Storage<K, V>::GetStoragePath();
     kv_->GetSnapshot(&key_list, &value_ptr_list);
     for (auto value_ptr : value_ptr_list) {
       feat_desc_->Deallocate(value_ptr);

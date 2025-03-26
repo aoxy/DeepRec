@@ -190,7 +190,7 @@ class MultiTierStorage : public Storage<K, V>, public TunableCache {
 
   virtual void BatchEviction() override {
     constexpr int EvictionSize = 10000;
-    constexpr int MinEvictionSize = 100;
+    constexpr int MinEvictionSize = 1;
     K evic_ids[EvictionSize];
     if (!ready_eviction_)
       return;
@@ -198,11 +198,13 @@ class MultiTierStorage : public Storage<K, V>, public TunableCache {
     cache_capacity_ = cache_->get_capacity();
     while (cache_count > cache_capacity_) {
       int k_size = cache_count - cache_capacity_;
-      if (k_size > MinEvictionSize) {
-        // LOG(INFO) << "Cache \"" << name_ << "\" is evicting " << k_size << " items";
+      if (k_size >= MinEvictionSize) {
         k_size = std::min(k_size, EvictionSize);
         size_t true_size = cache_->get_evic_ids(evic_ids, k_size);
         EvictionWithDelayedDestroy(evic_ids, true_size);
+        if (true_size == 0) break;
+      } else {
+        break;
       }
       cache_count = cache_->size();
       cache_capacity_ = cache_->get_capacity();
