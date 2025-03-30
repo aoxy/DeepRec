@@ -898,24 +898,32 @@ def main(tf_config=None, server=None):
     print("Saving model checkpoints to " + checkpoint_dir)
 
     # create data pipline of train & test dataset
-    train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-
-    if not (args.no_eval or tf_config):
+    if args.eval_only:
         test_dataset = build_model_input(test_file, batch_size, 1)
         iterator = tf.data.Iterator.from_structure(
-            train_dataset.output_types,
+            test_dataset.output_types,
             test_dataset.output_shapes
         )
         test_init_op = iterator.make_initializer(test_dataset)
+        train_init_op = None
     else:
-        iterator = tf.data.Iterator.from_structure(
-            train_dataset.output_types,
-            train_dataset.output_shapes
-        )
-        test_init_op = None
+        train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
+        if not (args.no_eval or tf_config):
+            test_dataset = build_model_input(test_file, batch_size, 1)
+            iterator = tf.data.Iterator.from_structure(
+                train_dataset.output_types,
+                test_dataset.output_shapes
+            )
+            test_init_op = iterator.make_initializer(test_dataset)
+        else:
+            iterator = tf.data.Iterator.from_structure(
+                train_dataset.output_types,
+                train_dataset.output_shapes
+            )
+            test_init_op = None
+        train_init_op = iterator.make_initializer(train_dataset)
 
     next_element = iterator.get_next()
-    train_init_op = iterator.make_initializer(train_dataset)
 
     # create feature column
     feature_column, ev_opt = build_feature_columns(args.data_location)
@@ -974,18 +982,26 @@ def main(tf_config=None, server=None):
 
     # Run model training and evaluation
     start_time = time.perf_counter()
-    train(sess_config, hooks, model, train_init_op, train_steps,
-          checkpoint_dir, tf_config, server)
-    end_time = time.perf_counter()
-    print("Train TimeCost =", end_time - start_time, "sec")
-    if not (args.no_eval or tf_config):
+    if args.eval_only:
+        checkpoint_dir = '/home/code/aoxy/DeepRec/tianchi/checkpoints/DIEN'
+        print("Loading model checkpoints from " + checkpoint_dir)
         os.environ['INFERENCE_MODE'] = 'True'
-        eval(sess_config, hooks, model, test_init_op, test_steps,
-             checkpoint_dir)
+        eval(sess_config, hooks, model, test_init_op, test_steps, checkpoint_dir)
         eval_time = time.perf_counter()
-        print("Eval TimeCost =", eval_time - end_time, "sec")
-    print("global_time_cost =", global_time_cost)
-    print("global_auc =", global_auc)
+        print("Eval TimeCost =", eval_time - start_time, "sec")
+    else:
+        train(sess_config, hooks, model, train_init_op, train_steps,
+            checkpoint_dir, tf_config, server)
+        end_time = time.perf_counter()
+        print("Train TimeCost =", end_time - start_time, "sec")
+        if not (args.no_eval or tf_config):
+            os.environ['INFERENCE_MODE'] = 'True'
+            eval(sess_config, hooks, model, test_init_op, test_steps,
+                checkpoint_dir)
+            eval_time = time.perf_counter()
+            print("Eval TimeCost =", eval_time - end_time, "sec")
+        print("global_time_cost =", global_time_cost)
+        print("global_auc =", global_auc)
 
 
 
@@ -1144,6 +1160,9 @@ def get_arg_parser():
                         help='Cache Capacities (MB).',
                         type=int,
                         default=256)
+    parser.add_argument('--eval_only',
+                        type=boolean_string,
+                        default=False)
     return parser
 
 

@@ -850,9 +850,9 @@ double PerfCacheUpdateAndEviction(
     if (k > 10)
       total_time += ((double)(end.tv_sec - start.tv_sec) * 1000000000 +
                      end.tv_nsec - start.tv_nsec);
-    LOG(INFO) << "[" << k << "/" << input_batches.size()
-              << "]Cache: " << cache->size()
-              << ", Map: " << hmap.size_lockless();
+    // LOG(INFO) << "[" << k << "/" << input_batches.size()
+    //           << "]Cache: " << cache->size()
+    //           << ", Map: " << hmap.size_lockless();
   }
   if (cache->size() > cache->get_capacity()) {
     size_t k_size = cache->size() - cache->get_capacity();
@@ -929,12 +929,16 @@ void TestCacheUpdateAndEvictionTable() {
   LOG(INFO) << "Cache capacity = " << capacity << " ("
             << capacity * 100 / uids.size() << "%)";
 
-  std::vector<int> num_thread_vec({1, 2, 4, 8, 16});
+  std::vector<int> num_thread_vec({1, 2, 4, 8, 16, 24, 32, 40, 48});
   std::vector<CacheStrategy> cache_strategy_vec(
-      {CacheStrategy::LRU, CacheStrategy::LFU, CacheStrategy::B8LRU,
-       CacheStrategy::B8LFU, CacheStrategy::B16LRU,
-       CacheStrategy::B16LFU, CacheStrategy::B32LRU,
-       CacheStrategy::B32LFU});
+      {CacheStrategy::LRU, CacheStrategy::LFU,
+        CacheStrategy::B4LRU, CacheStrategy::B4LFU,
+        CacheStrategy::B8LRU, CacheStrategy::B8LFU,
+        CacheStrategy::B16LRU, CacheStrategy::B16LFU,
+        CacheStrategy::B32LRU, CacheStrategy::B32LFU,
+        CacheStrategy::B48LRU, CacheStrategy::B48LFU,
+        CacheStrategy::B64LRU, CacheStrategy::B64LFU,
+        CacheStrategy::ShardedLRU});
   for (auto num_thread : num_thread_vec) {
     for (auto cache_strategy : cache_strategy_vec) {
       double exec_time = PerfCacheUpdateAndEviction(

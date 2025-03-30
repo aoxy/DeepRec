@@ -39,10 +39,11 @@ const uint32 kEmbPositionVersionMask = 0b11111111111000000000000000000000;
 const uint32 kEmbPositionOffsetMask  = 0b00000000000111111111111111111100;
 const uint32 kEmbPositionInvalidMask = 0b00000000000000000000000000000010;
 const uint32 kEmbPositionFlushedMask = 0b00000000000000000000000000000001;
+const uint32 kEmbPositionVersionOffset = 21;
 
 static inline EmbPosition SetEmbPositionVersion(EmbPosition& ep, uint32 offset) {
   ep &= ~static_cast<uint32>(kEmbPositionVersionMask);
-  ep |= offset << 20;
+  ep |= offset << kEmbPositionVersionOffset;
   return ep;
 }
 
@@ -68,7 +69,7 @@ static inline EmbPosition SetEmbPositionFlushed(EmbPosition& ep, bool flushed) {
 }
 
 static inline uint32 GetEmbPositionVersion(EmbPosition& ep) {
-  return (ep & kEmbPositionVersionMask) >> 20;
+  return (ep & kEmbPositionVersionMask) >> kEmbPositionVersionOffset;
 }
 
 static inline uint32 GetEmbPositionOffset(EmbPosition& ep) {
@@ -221,7 +222,7 @@ class SSDHashKV : public KVInterface<K, V> {
     val_len_ = feat_desc_->data_bytes();
     file_capacity_ = BUFFER_SIZE / val_len_;
     if (file_capacity_ > (1 << 19)) {
-      LOG(FATAL) << "The 18-bit offset is not enough to save the Embedding of length " << val_len_ << " in the SSD KV.";
+      LOG(FATAL) << "The 19-bit offset is not enough to save the Embedding of length " << val_len_ << " in the SSD KV.";
     }
     write_buffer_ = new char[BUFFER_SIZE];
     key_buffer_ = new K[file_capacity_];

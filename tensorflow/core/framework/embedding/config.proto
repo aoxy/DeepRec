@@ -52,6 +52,7 @@ enum CacheStrategy {
   B32LFU = 11;
   B48LFU = 12;
   B64LFU = 13;
+  ShardedLRU = 14;
 }
 
 enum EmbeddingVariableType {
