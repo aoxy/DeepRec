@@ -929,7 +929,7 @@ void TestCacheUpdateAndEvictionTable() {
   LOG(INFO) << "Cache capacity = " << capacity << " ("
             << capacity * 100 / uids.size() << "%)";
 
-  std::vector<int> num_thread_vec({1, 2, 4, 8, 16, 24, 32, 40, 48});
+  std::vector<int> num_thread_vec({1, 2, 4, 8, 12, 16, 20, 24, 28, 32});
   std::vector<CacheStrategy> cache_strategy_vec(
       {CacheStrategy::LRU, CacheStrategy::LFU,
         CacheStrategy::B4LRU, CacheStrategy::B4LFU,
@@ -939,6 +939,9 @@ void TestCacheUpdateAndEvictionTable() {
         CacheStrategy::B48LRU, CacheStrategy::B48LFU,
         CacheStrategy::B64LRU, CacheStrategy::B64LFU,
         CacheStrategy::ShardedLRU});
+  // std::vector<int> num_thread_vec({28});
+  // std::vector<CacheStrategy> cache_strategy_vec({
+  //       CacheStrategy::B48LFU, CacheStrategy::B32LFU});
   for (auto num_thread : num_thread_vec) {
     for (auto cache_strategy : cache_strategy_vec) {
       double exec_time = PerfCacheUpdateAndEviction(
