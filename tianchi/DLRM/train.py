@@ -499,16 +499,20 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
 
     with tf.train.MonitoredSession(session_creator=session_creator,
                                    hooks=hooks) as sess:
+        start_time = time.perf_counter()
         for _in in range(1, steps + 1):
             if (_in != steps):
                 sess.run([model.acc_op, model.auc_op])
                 if (_in % 100 == 0):
-                    print("Evaluation complate:[{}/{}]".format(_in, steps))
+                    end_time = time.perf_counter()
+                    costs = end_time - start_time
+                    print("Evaluation complete:[{}/{}] {} sec".format(_in, steps, costs))
+                    start_time = time.perf_counter()
             else:
                 eval_acc, eval_auc, events = sess.run(
                     [model.acc_op, model.auc_op, merged])
                 writer.add_summary(events, _in)
-                print("Evaluation complate:[{}/{}]".format(_in, steps))
+                print("Evaluation complete:[{}/{}]".format(_in, steps))
                 print("ACC = {}\nAUC = {}".format(eval_acc, eval_auc))
                 global global_auc
                 global_auc = eval_auc
@@ -560,6 +564,35 @@ def main(tf_config=None, server=None):
         train_init_op = None
     else:
         train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
+        if args.reuse_stat:
+            from collections import defaultdict
+            import pickle
+            last_pos = [defaultdict(lambda: -1) for _ in EMBEDDING_COLS]
+            reuse_distances = [[] for _ in EMBEDDING_COLS]
+            visit_list = [[] for _ in EMBEDDING_COLS]
+            global_index = 0
+            iterator = train_dataset.make_one_shot_iterator()
+            next_element = iterator.get_next()
+            with tf.Session() as sess:
+                while True:
+                    try:
+                        feature_value = sess.run(next_element)[0]
+                        for i, col in enumerate(EMBEDDING_COLS):
+                            for value in feature_value[col]:
+                                values = value.decode("utf-8").split(";")
+                                for v in values:
+                                    if last_pos[i][v] != -1:
+                                        distance = global_index - last_pos[i][v] - 1
+                                        reuse_distances[i].append(distance)
+                                    last_pos[i][v] = global_index
+                                    visit_list[i].append((v, global_index))
+                                global_index += 1
+                    except tf.errors.OutOfRangeError:
+                        pickle.dump(reuse_distances, open("reuse_distances.pk", "wb"))
+                        pickle.dump(EMBEDDING_COLS, open("EMBEDDING_COLS.pk", "wb"))
+                        pickle.dump(visit_list, open("visit_list.pk", "wb"))
+                        break
+            return
         if not (args.no_eval or tf_config):
             test_dataset = build_model_input(test_file, batch_size, 1)
             iterator = tf.data.Iterator.from_structure(
@@ -747,6 +780,9 @@ def get_arg_parser():
                         nargs='+',
                         default=[256])
     parser.add_argument('--eval_only',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument('--reuse_stat',
                         type=boolean_string,
                         default=False)
     return parser

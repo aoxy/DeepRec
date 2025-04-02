@@ -42,14 +42,11 @@ class BlockLockLFUCache : public BatchCache<K> {
         is_expanding_(false),
         is_rehash_(false) {
     block_count_ = (capacity_ + way_ - 1) / way_;
-    full_ways_ = capacity_ % way_;
     cache_.resize(block_count_);
-    for (size_t i = 0; i < full_ways_; i++) {
+    for (size_t i = 0; i < block_count_ - 1; i++) {
       cache_[i] = new CacheBlock(way_);
     }
-    for (size_t i = full_ways_; i < block_count_; i++) {
-      cache_[i] = new CacheBlock(way_ - 1);
-    }
+    cache_[block_count_ - 1] = new CacheBlock(way_ + capacity_ - block_count_ * way_);
     TF_CHECK_OK(ReadBoolFromEnvVar("TF_CACHE_RECORD_HITRATE", false,
                                    &is_record_hitrate_));
     BatchCache<K>::size_data_.resize(num_threads_);
@@ -81,23 +78,20 @@ class BlockLockLFUCache : public BatchCache<K> {
     if (new_capacity < capacity_) {
       LOG(INFO) << "Use shrink to change cache capacity.=================== " << capacity_ << " To " << new_capacity;
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
-      full_ways_ = new_capacity % new_way_;
+      full_ways_ = new_capacity + block_count_ - block_count_ * new_way_;
       __sync_bool_compare_and_swap(&is_shrinking_, false, true);
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
     } else if (new_capacity > base_capacity_ * 2) {
       LOG(INFO) << "Use rehash to change cache capacity.++++++++++++++ " << capacity_ << " To " << new_capacity;
       size_t new_block_count_ = (new_capacity + way_ - 1) / way_;
-      size_t new_full_ways_ = new_capacity % way_;
       __sync_bool_compare_and_swap(&is_rehash_, false, true);
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
       std::vector<CacheBlock*> new_cache_;
       new_cache_.resize(new_block_count_);
-      for (size_t i = 0; i < new_full_ways_; i++) {
+      for (size_t i = 0; i < new_block_count_ - 1; i++) {
         new_cache_[i] = new CacheBlock(way_);
       }
-      for (size_t i = new_full_ways_; i < new_block_count_; i++) {
-        new_cache_[i] = new CacheBlock(way_ - 1);
-      }
+      new_cache_[new_block_count_ - 1] = new CacheBlock(way_ + new_capacity - new_block_count_ * way_);
       for (size_t i = 0; i < cache_.size(); i++) {
         CacheBlock& curr_block = *cache_[i];
         std::vector<CacheItem>& curr_cached = curr_block.cached;
@@ -123,14 +117,13 @@ class BlockLockLFUCache : public BatchCache<K> {
         mutex_lock l(rehash_mu_);
         cache_.swap(new_cache_);
         block_count_ = new_block_count_;
-        full_ways_ = new_full_ways_;
         base_capacity_ = capacity_;
       }
       __sync_bool_compare_and_swap(&is_rehash_, true, false);
     } else {
       LOG(INFO) << "Use append to change cache capacity.=================== " << capacity_ << " To " << new_capacity;
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
-      full_ways_ = new_capacity % new_way_;
+      full_ways_ = new_capacity + block_count_ - block_count_ * new_way_;
       __sync_bool_compare_and_swap(&is_expanding_, false, true);
       __sync_bool_compare_and_swap(&is_shrinking_, true, false);
     }

@@ -33,19 +33,16 @@ class BlockLockLRUCache : public BatchCache<K> {
         num_threads_(num_threads),
         way_(way),
         thread_count_idx(0),
-        global_version_(0),
+        // global_version_(0),
         is_shrinking_(false),
         is_expanding_(false),
         is_rehash_(false) {
     block_count_ = (capacity_ + way_ - 1) / way_;
-    full_ways_ = capacity_ % way_;
     cache_.resize(block_count_);
-    for (size_t i = 0; i < full_ways_; i++) {
+    for (size_t i = 0; i < block_count_ - 1; i++) {
       cache_[i] = new CacheBlock(way_);
     }
-    for (size_t i = full_ways_; i < block_count_; i++) {
-      cache_[i] = new CacheBlock(way_ - 1);
-    }
+    cache_[block_count_ - 1] = new CacheBlock(way_ + capacity_ - block_count_ * way_);
     TF_CHECK_OK(ReadBoolFromEnvVar("TF_CACHE_RECORD_HITRATE", false,
                                    &is_record_hitrate_));
     BatchCache<K>::size_data_.resize(num_threads_);
@@ -77,23 +74,20 @@ class BlockLockLRUCache : public BatchCache<K> {
     if (new_capacity < capacity_) {
       LOG(INFO) << "Use shrink to change cache capacity.=================== " << capacity_ << " To " << new_capacity;
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
-      full_ways_ = new_capacity % new_way_;
+      full_ways_ = new_capacity + block_count_ - block_count_ * new_way_;
       __sync_bool_compare_and_swap(&is_shrinking_, false, true);
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
     } else if (new_capacity > base_capacity_ * 2) {
       LOG(INFO) << "Use rehash to change cache capacity.++++++++++++++ " << capacity_ << " To " << new_capacity;
       size_t new_block_count_ = (new_capacity + way_ - 1) / way_;
-      size_t new_full_ways_ = new_capacity % way_;
       __sync_bool_compare_and_swap(&is_rehash_, false, true);
       __sync_bool_compare_and_swap(&is_expanding_, true, false);
       std::vector<CacheBlock*> new_cache_;
       new_cache_.resize(new_block_count_);
-      for (size_t i = 0; i < new_full_ways_; i++) {
+      for (size_t i = 0; i < new_block_count_ - 1; i++) {
         new_cache_[i] = new CacheBlock(way_);
       }
-      for (size_t i = new_full_ways_; i < new_block_count_; i++) {
-        new_cache_[i] = new CacheBlock(way_ - 1);
-      }
+      new_cache_[new_block_count_ - 1] = new CacheBlock(way_ + new_capacity - new_block_count_ * way_);
       for (size_t i = 0; i < cache_.size(); i++) {
         CacheBlock& curr_block = *cache_[i];
         std::vector<CacheItem>& curr_cached = curr_block.cached;
@@ -119,14 +113,13 @@ class BlockLockLRUCache : public BatchCache<K> {
         mutex_lock l(rehash_mu_);
         cache_.swap(new_cache_);
         block_count_ = new_block_count_;
-        full_ways_ = new_full_ways_;
         base_capacity_ = capacity_;
       }
       __sync_bool_compare_and_swap(&is_rehash_, true, false);
     } else {
       LOG(INFO) << "Use append to change cache capacity.=================== " << capacity_ << " To " << new_capacity;
       new_way_ = (new_capacity + block_count_ - 1) / block_count_;
-      full_ways_ = new_capacity % new_way_;
+      full_ways_ = new_capacity + block_count_ - block_count_ * new_way_;
       __sync_bool_compare_and_swap(&is_expanding_, false, true);
       __sync_bool_compare_and_swap(&is_shrinking_, true, false);
     }
@@ -164,7 +157,7 @@ class BlockLockLRUCache : public BatchCache<K> {
   }
 
   void update(const K* batch_ids, size_t batch_size, bool use_locking = true) {
-    __sync_fetch_and_add(&global_version_, 1);
+    // __sync_fetch_and_add(&global_version_, 1);
     bool found;
     bool insert;
     size_t min_j;
@@ -181,7 +174,7 @@ class BlockLockLRUCache : public BatchCache<K> {
       mutex_lock l(curr_block.mtx_cached);
       for (size_t j = 0; j < curr_cached.size(); ++j) {
         if (id == curr_cached[j].id) {
-          curr_cached[j].value = global_version_;
+          curr_cached[j].value = Env::Default()->NowMicros();
           found = true;
           ++batch_hit;
           break;
@@ -193,7 +186,7 @@ class BlockLockLRUCache : public BatchCache<K> {
           ++size_add;
         }
         if (is_expanding_ && curr_cached.size() < (new_way_ - (bidx >= full_ways_))) {
-          curr_cached.emplace_back(id, global_version_);
+          curr_cached.emplace_back(id, Env::Default()->NowMicros());
         } else {
           unsigned int curr_size = curr_cached.size();
           if (is_shrinking_) {
@@ -205,7 +198,7 @@ class BlockLockLRUCache : public BatchCache<K> {
           for (size_t j = 0; j < curr_size; ++j) {
             if (BlockLockLRUCache<K>::EMPTY_CACHE_KEY == curr_cached[j].id) {
               curr_cached[j].id = id;
-              curr_cached[j].value = global_version_;
+              curr_cached[j].value = Env::Default()->NowMicros();
               insert = true;
               break;
             } else if (min_version > curr_cached[j].value) {
@@ -216,7 +209,7 @@ class BlockLockLRUCache : public BatchCache<K> {
           if (!insert) {
             evicted.insert_lockless(curr_cached[min_j].id);
             curr_cached[min_j].id = id;
-            curr_cached[min_j].value = global_version_;
+            curr_cached[min_j].value = Env::Default()->NowMicros();
           }
           if (is_shrinking_) {
             for (size_t j = curr_size; j < curr_cached.size(); ++j) {
@@ -285,7 +278,7 @@ class BlockLockLRUCache : public BatchCache<K> {
   bool is_rehash_;
   mutex evic_mu_;
   mutex rehash_mu_;
-  size_t global_version_;
+  // size_t global_version_;
   bool is_record_hitrate_;
   unsigned int thread_count_idx;
   static const K EMPTY_CACHE_KEY;

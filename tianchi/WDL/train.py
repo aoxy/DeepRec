@@ -550,7 +550,7 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
     hooks.extend(input_hooks)
 
     scaffold = tf.train.Scaffold(
-        local_init_op=tf.group(tf.local_variables_initializer(), data_init_op))
+        local_init_op=tf.group(tf.tables_initializer(),tf.local_variables_initializer(), data_init_op))
     session_creator = tf.train.ChiefSessionCreator(
         scaffold=scaffold, checkpoint_dir=checkpoint_dir, config=sess_config)
     writer = tf.summary.FileWriter(os.path.join(checkpoint_dir, 'eval'))
@@ -558,11 +558,15 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
 
     with tf.train.MonitoredSession(session_creator=session_creator,
                                    hooks=hooks) as sess:
+        start_time = time.perf_counter()
         for _in in range(1, steps + 1):
             if (_in != steps):
                 sess.run([model.acc_op, model.auc_op])
-                if (_in % 1000 == 0):
-                    print("Evaluation complete:[{}/{}]".format(_in, steps))
+                if (_in % 100 == 0):
+                    end_time = time.perf_counter()
+                    costs = end_time - start_time
+                    print("Evaluation complete:[{}/{}] {} sec".format(_in, steps, costs))
+                    start_time = time.perf_counter()
             else:
                 eval_acc, eval_auc, events = sess.run(
                     [model.acc_op, model.auc_op, merged])
@@ -625,8 +629,6 @@ def main(tf_config=None, server=None):
     print("Saving model checkpoints to " + checkpoint_dir)
 
     # create data pipline of train & test dataset
-    train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
-
     if args.eval_only:
         test_dataset = build_model_input(test_file, batch_size, 1)
         iterator = tf.data.Iterator.from_structure(
@@ -680,7 +682,7 @@ def main(tf_config=None, server=None):
 
     if args.smartstaged and not args.tf:
         '''Smart staged Feature'''
-        next_element = tf.staged(next_element, num_threads=4, capacity=40)
+        next_element = tf.staged(next_element, num_threads=4, capacity=10)
         sess_config.graph_options.optimizer_options.do_smart_stage = True
         hooks.append(tf.make_prefetch_hook())
     if args.op_fusion and not args.tf:
@@ -975,6 +977,7 @@ def set_env_for_DeepRec():
     os.environ['STOP_STATISTIC_STEP'] = '110'
     os.environ['MALLOC_CONF']= \
         'background_thread:true,metadata_thp:auto,dirty_decay_ms:20000,muzzy_decay_ms:20000'
+    os.environ['ENABLE_MEMORY_OPTIMIZATION'] = '0'
     if args.group_embedding == "collective":
         tf.config.experimental.enable_distributed_strategy(strategy="collective")
         if args.smartstaged and not args.tf:

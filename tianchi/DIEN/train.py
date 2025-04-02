@@ -841,16 +841,20 @@ def eval(sess_config, input_hooks, model, data_init_op, steps, checkpoint_dir):
 
     with tf.train.MonitoredSession(session_creator=session_creator,
                                    hooks=hooks) as sess:
+        start_time = time.perf_counter()
         for _in in range(1, steps + 1):
             if (_in != steps):
                 sess.run([model.acc_op, model.auc_op])
                 if (_in % 100 == 0):
-                    print("Evaluation complate:[{}/{}]".format(_in, steps))
+                    end_time = time.perf_counter()
+                    costs = end_time - start_time
+                    print("Evaluation complete:[{}/{}] {} sec".format(_in, steps, costs))
+                    start_time = time.perf_counter()
             else:
                 eval_acc, eval_auc, events = sess.run(
                     [model.acc_op, model.auc_op, merged])
                 writer.add_summary(events, _in)
-                print("Evaluation complate:[{}/{}]".format(_in, steps))
+                print("Evaluation complete:[{}/{}]".format(_in, steps))
                 print("ACC = {}\nAUC = {}".format(eval_acc, eval_auc))
                 global global_auc
                 global_auc = eval_auc
