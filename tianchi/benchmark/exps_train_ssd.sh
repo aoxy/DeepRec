@@ -24,7 +24,7 @@ record_one_train() {
     wait $cpp_pid
     kill $top_pid
     echo "Final disk read, written sectors(512 bytes): $(get_disk_read_written_sectors)" >> $log_dir/train_disk_usage/disk_usage_$path_cache_cap.txt
-    log_message "Train with $storage_type and [$cache_sizes] x100MB Cache done."
+    log_message "$model_name Train with $storage_type and [$cache_sizes] MB Cache done."
     rm -rf temp_emb/*
 }
 
