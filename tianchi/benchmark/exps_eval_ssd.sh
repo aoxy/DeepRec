@@ -7,6 +7,12 @@ get_disk_read_written_sectors() {
     echo $diskstats
 }
 
+function log_message() {
+    local message="$1"
+    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    echo "[$timestamp] $message"
+}
+
 record_one_eval() {
     path_cache_cap="${cache_sizes// /_}"
     echo "Initial disk read, written sectors(512 bytes): $(get_disk_read_written_sectors)" > $log_dir/eval_disk_usage/disk_usage_$path_cache_cap.txt
@@ -17,7 +23,7 @@ record_one_eval() {
     wait $cpp_pid
     kill $top_pid
     echo "Final disk read, written sectors(512 bytes): $(get_disk_read_written_sectors)" >> $log_dir/eval_disk_usage/disk_usage_$path_cache_cap.txt
-    echo "Evaluate with $storage_type and [$cache_sizes] x100MB Cache done."
+    log_message "Evaluate with $storage_type and [$cache_sizes] x100MB Cache done."
     rm -rf temp_emb/*
 }
 
@@ -38,10 +44,10 @@ warm_up
 echo "Warm Up done."
 
 declare -A MODEL_CONFIG=(
-    [DLRM]="40 45 50 55 60 65 70 75"
-    [MMoE]="40 45 50 55 60 65 70 75"
-    [WDL]="40 45 50 55 60 65 70 75"
-    [DIEN]="40 45 50 55 60 65 70 75"
+    [DLRM]="4000 6000"
+    [MMoE]="200 300"
+    [WDL]="4000 6000"
+    [DIEN]="250 350"
 )
 
 cache_sizes_ls=(${MODEL_CONFIG["${model_name:-DLRM}"]})

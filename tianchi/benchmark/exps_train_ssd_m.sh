@@ -7,6 +7,12 @@ get_disk_read_written_sectors() {
     echo $diskstats
 }
 
+function log_message() {
+    local message="$1"
+    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    echo "[$timestamp] $message"
+}
+
 record_one_train() {
     rm -rf ./result/*
     path_cache_cap="${cache_sizes// /_}"
@@ -18,7 +24,7 @@ record_one_train() {
     wait $cpp_pid
     kill $top_pid
     echo "Final disk read, written sectors(512 bytes): $(get_disk_read_written_sectors)" >> $log_dir/train_disk_usage/disk_usage_$path_cache_cap.txt
-    echo "Train with $storage_type and [$cache_sizes] x100MB Cache done."
+    log_message "Train with $storage_type and [$cache_sizes] x100MB Cache done."
     rm -rf temp_emb/*
 }
 

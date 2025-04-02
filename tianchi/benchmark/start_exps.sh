@@ -10,6 +10,10 @@ tar_dir=$deeprec_dir/tianchi/benchmark/archives
 cd $deeprec_dir
 mkdir -p $tar_dir
 
+docker stop axynetp
+docker update --memory "160g" --memory-swap "170g" axynetp
+docker start axynetp
+
 function log_message() {
     local message="$1"
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
@@ -34,7 +38,7 @@ function run_task() {
     local task_name="$4"
 
     # 计算 swap 值
-    local swap=$(echo "$memory + 8" | bc)
+    local swap=$(echo "$memory + 12" | bc)
 
     # 构建完整的tar文件路径
     local tar_file="$tar_dir/$tar_name"
@@ -118,18 +122,14 @@ echo "Eval     L: $Eval_LMem, M: $Eval_MMem, S: $Eval_SMem" >> $tar_dir/config.t
 
 
 # DRAM train + eval + timeline
-# run_task "160" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_dram.sh" "metrics_dram.tar.gz" "DRAM Train + Eval + Timeline ($Train_LMem)"
+run_task "160" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_dram.sh" "metrics_dram.tar.gz" "DRAM Train + Eval + Timeline ($Train_LMem)"
 
 run_task "$Train_LMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_train_ssd_l.sh" "metrics_l_ssd_train.tar.gz" "SSD Train ($Train_LMem)"
-# run_task "$Eval_LMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_l_ssd_eval.tar.gz" "SSD Eval ($Eval_LMem)"
+run_task "$Eval_LMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_l_ssd_eval.tar.gz" "SSD Eval ($Eval_LMem)"
 
 run_task "$Train_MMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_train_ssd_m.sh" "metrics_m_ssd_train.tar.gz" "SSD Train ($Train_MMem)"
-# run_task "$Eval_MMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_m_ssd_eval.tar.gz" "SSD Eval ($Eval_MMem)"
+run_task "$Eval_MMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_m_ssd_eval.tar.gz" "SSD Eval ($Eval_MMem)"
 
 run_task "$Train_SMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_train_ssd_s.sh" "metrics_s_ssd_train.tar.gz" "SSD Train ($Train_SMem)"
-# run_task "$Eval_SMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_s_ssd_eval.tar.gz" "SSD Eval ($Eval_SMem)"
+run_task "$Eval_SMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_s_ssd_eval.tar.gz" "SSD Eval ($Eval_SMem)"
 
-
-docker stop axynetp
-docker update --memory "160g" --memory-swap "170g" axynetp
-docker start axynetp

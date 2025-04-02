@@ -90,6 +90,34 @@ StorageTypeDict = {
     'DRAM_LEVELDB': config_pb2.StorageType.DRAM_LEVELDB,
 }
 
+CacheStrategyDict = {
+    'LRU': config_pb2.CacheStrategy.LRU,
+    'LFU': config_pb2.CacheStrategy.LFU,
+    'B16LRU': config_pb2.CacheStrategy.B16LRU,
+    'B16LFU': config_pb2.CacheStrategy.B16LFU,
+    'B32LRU': config_pb2.CacheStrategy.B32LRU,
+    'B32LFU': config_pb2.CacheStrategy.B32LFU,
+    'B48LRU': config_pb2.CacheStrategy.B48LRU,
+    'B48LFU': config_pb2.CacheStrategy.B48LFU,
+}
+
+TABEL_SIZES = {
+    "district_id" : (2557, 1536),
+    "times" : (82589, 1536),
+    "timediff_list" : (4987656, 1536),
+    "user_id" : (1343323, 1536),
+}
+
+def get_cache_factors(table):
+    all_sizes = {k: c * s for k, (c, s) in table.items()}
+    tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
+    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 4987656}
+    total = sum(filtered_items.values())
+    result = {}
+    if total > 0:
+        result = {k: round(v / total, 4) for k, v in filtered_items.items()}
+    return result
+
 
 class DLRM():
 
@@ -354,26 +382,31 @@ def build_feature_columns():
 
     os.makedirs(args.emb_dir, exist_ok=True)
 
+    if len(args.cache_sizes) == 1:
+        cache_sizes_list = [int(args.cache_sizes[0]) for _ in EMBEDDING_COLS]
+    elif len(args.cache_sizes) == len(EMBEDDING_COLS):
+        cache_sizes_list = [int(x) for x in args.cache_sizes]
+    else:
+        print("Invalid cache_sizes:", args.cache_sizes)
+        exit(-1)
+
+    cache_factors = get_cache_factors(TABEL_SIZES)
+
     for column in EMBEDDING_COLS:
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
-        use_ev = True
-        if len(args.cache_cap) == 1 and column == 'timediff_list':
-            cache_cap_mb = int(args.cache_cap[0]) * 100
-        elif len(args.cache_cap) == 2 and column == 'timediff_list':
-            cache_cap_mb = int(args.cache_cap[0]) * 100
-        elif len(args.cache_cap) == 2 and column == 'user_id':
-            cache_cap_mb = int(args.cache_cap[1]) * 100
-        else:
-            use_ev = False
-        if use_ev:
+        
+        cache_size = cache_factors.get(column, 0) * cache_sizes_list[0]
+        if cache_size > 0 or args.storage_type == 'DRAM':
             storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
-                                        storage_path=args.emb_dir,
-                                        storage_size=[1024 * 1024 * cache_cap_mb],
-                                        cache_strategy = config_pb2.CacheStrategy.B32LFU)
+                                        storage_path=f"{args.emb_dir}/{column}",
+                                        storage_size=[1024 * 1024 * cache_size],
+                                        cache_strategy = CacheStrategyDict[args.cache_strategy])
+
             ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
-            tf.logging.info(f'[Feature {column}] Use {args.storage_type}, Cache Capacity {cache_cap_mb}MB')
+            tf.logging.info(f'[Feature {column}] Use {args.storage_type}, {args.cache_strategy}, Cache Capacity {cache_size}MB')
             cate_col = feature_column_v2.categorical_column_with_embedding(column, dtype=tf.string, ev_option=ev_opt)
+
 
         if args.tf or not args.emb_fusion:
             emb_col = tf.feature_column.embedding_column(
@@ -518,7 +551,7 @@ def get_arg_parser():
     parser.add_argument('--data_location',
                         help='Full path of train data',
                         required=False,
-                        default='./data')
+                        default='/home/code/elem')
     parser.add_argument('--steps',
                         help='set the number of steps on train dataset',
                         type=int,
@@ -583,7 +616,7 @@ def get_arg_parser():
     parser.add_argument('--smartstaged', \
                         help='Whether to enable smart staged feature of DeepRec.',
                         type=boolean_string,
-                        default=False)
+                        default=True)
     parser.add_argument('--emb_fusion', \
                         help='Whether to enable embedding fusion, Default to True.',
                         type=boolean_string,
@@ -596,11 +629,6 @@ def get_arg_parser():
                         help='Full path to store embeddings on SSD',
                         required=False,
                         default='./temp_emb')
-    parser.add_argument('--cache_cap',
-                        help='Cache Capacities (x100MB). Provide multiple values as a list.',
-                        type=int,
-                        nargs='+',
-                        default=[11])
     parser.add_argument('--storage_type',
                         type=str,
                         choices=['DRAM', 'DRAM_SSDHASH', 'DRAM_LEVELDB'],
@@ -609,6 +637,16 @@ def get_arg_parser():
                         help='Embedding dimension',
                         type=int,
                         default=128)
+    parser.add_argument('--cache_strategy',
+                        help='',
+                        type=str,
+                        choices=['LRU', 'LFU', 'B16LRU', 'B16LFU', 'B32LRU', 'B32LFU', 'B48LRU', 'B48LFU'],
+                        default='B32LFU')
+    parser.add_argument('--cache_sizes',
+                        help='Cache Capacities (MB). Provide multiple values as a list.',
+                        type=int,
+                        nargs='+',
+                        default=[256])
     return parser
 
 
