@@ -143,6 +143,8 @@ TABEL_SIZES = {
     "C16" : (1258743, 1536),
 }
 
+TUNING_COL = ['C3', 'C12', 'C21', 'C4', 'C16']
+
 def get_cache_factors(table):
     all_sizes = {k: c * s for k, (c, s) in table.items()}
     tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
@@ -435,7 +437,7 @@ def build_feature_columns():
 
     if len(args.cache_sizes) == 1:
         cache_sizes_list = [int(args.cache_sizes[0]) for _ in CATEGORICAL_COLUMNS]
-    elif len(args.cache_sizes) == len(CATEGORICAL_COLUMNS):
+    elif len(args.cache_sizes) == len(TUNING_COL):
         cache_sizes_list = [int(x) for x in args.cache_sizes]
     else:
         print("Invalid cache_sizes:", args.cache_sizes)
@@ -449,9 +451,13 @@ def build_feature_columns():
                 column_name, hash_bucket_size=10000, dtype=tf.string)
             wide_columns.append(categorical_column)
 
-            cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
+            # cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
+            cache_size = cache_sizes_list[TUNING_COL.index(column_name)] if column_name in TUNING_COL else 1
             if cache_size > 0 or args.storage_type == 'DRAM':
-                storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                stype = args.storage_type
+                if column_name not in TUNING_COL:
+                    stype = 'DRAM'
+                storage_option = tf.StorageOption(storage_type=StorageTypeDict[stype],
                                             storage_path=f"{args.emb_dir}/{column_name}",
                                             storage_size=[1024 * 1024 * cache_size],
                                             cache_strategy = CacheStrategyDict[args.cache_strategy])

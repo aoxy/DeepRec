@@ -46,13 +46,12 @@ cd /home/code/aoxy/DeepRec/tianchi/$model_name/
 
 
 declare -A MODEL_CONFIG=(
-    [DLRM]="3500"
+    [DLRM]="733 2 46 2719|733 3 46 2718|733 4 46 2717|733 4 76 2687|733 4 100 2663|733 4 120 2643|833 4 120 2543|933 4 120 2443|633 4 120 2743|1033 4 120 2343"
     [MMoE]="210"
     [WDL]="3000"
     [DIEN]="250"
 )
 
-cache_sizes_ls=(${MODEL_CONFIG["${model_name:-DLRM}"]})
 
 for rep in {0..0}
 do
@@ -61,13 +60,15 @@ do
     mkdir -p $log_dir/train_dlrm_log
     mkdir -p $log_dir/train_memory_usage
 
-    storage_type="DRAM"
-    cache_sizes=00
-    record_one_train
+    # storage_type="DRAM"
+    # cache_sizes=00
+    # record_one_train
 
     storage_type="DRAM_SSDHASH"
-    for cache_sizes in "${cache_sizes_ls[@]}"
-    do
+    IFS='|' read -ra config_groups <<< "${MODEL_CONFIG[$model_name]}"
+    for group in "${config_groups[@]}"; do
+        IFS=' ' read -ra cache_sizes_ls <<< "$group"
+        cache_sizes="${cache_sizes_ls[*]}"
         record_one_train
     done
 done

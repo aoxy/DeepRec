@@ -125,11 +125,11 @@ echo "Eval     L: $Eval_LMem, M: $Eval_MMem, S: $Eval_SMem" >> $tar_dir/config.t
 run_task "160" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_dram.sh" "metrics_dram.tar.gz" "DRAM Train + Eval + Timeline ($Train_LMem)"
 
 run_task "$Train_LMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_train_ssd_l.sh" "metrics_l_ssd_train.tar.gz" "SSD Train ($Train_LMem)"
-run_task "$Eval_LMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_l_ssd_eval.tar.gz" "SSD Eval ($Eval_LMem)"
+# run_task "$Eval_LMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_l_ssd_eval.tar.gz" "SSD Eval ($Eval_LMem)"
 
 run_task "$Train_MMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_train_ssd_m.sh" "metrics_m_ssd_train.tar.gz" "SSD Train ($Train_MMem)"
-run_task "$Eval_MMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_m_ssd_eval.tar.gz" "SSD Eval ($Eval_MMem)"
+# run_task "$Eval_MMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_m_ssd_eval.tar.gz" "SSD Eval ($Eval_MMem)"
 
 run_task "$Train_SMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_train_ssd_s.sh" "metrics_s_ssd_train.tar.gz" "SSD Train ($Train_SMem)"
-run_task "$Eval_SMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_s_ssd_eval.tar.gz" "SSD Eval ($Eval_SMem)"
+# run_task "$Eval_SMem" "/home/code/aoxy/DeepRec/tianchi/benchmark/exps_eval_ssd.sh" "metrics_s_ssd_eval.tar.gz" "SSD Eval ($Eval_SMem)"
 

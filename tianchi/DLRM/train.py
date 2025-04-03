@@ -107,6 +107,8 @@ TABEL_SIZES = {
     "user_id" : (1343323, 1536),
 }
 
+TUNING_COL = ['district_id', 'times', 'timediff_list', 'user_id']
+
 def get_cache_factors(table):
     all_sizes = {k: c * s for k, (c, s) in table.items()}
     tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
@@ -385,6 +387,7 @@ def build_feature_columns():
         cache_sizes_list = [int(args.cache_sizes[0]) for _ in EMBEDDING_COLS]
     elif len(args.cache_sizes) == len(EMBEDDING_COLS):
         cache_sizes_list = [int(x) for x in args.cache_sizes]
+        # ['1343323', '2557', '82589', '4987656']
     else:
         print("Invalid cache_sizes:", args.cache_sizes)
         exit(-1)
@@ -395,7 +398,7 @@ def build_feature_columns():
         cate_col = tf.feature_column.categorical_column_with_hash_bucket(
             column, HASH_BUCKET_SIZES)
         
-        cache_size = cache_factors.get(column, 0) * cache_sizes_list[0]
+        cache_size = cache_sizes_list[EMBEDDING_COLS.index(column)]
         if cache_size > 0 or args.storage_type == 'DRAM':
             storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
                                         storage_path=f"{args.emb_dir}/{column}",
