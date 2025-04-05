@@ -429,7 +429,7 @@ def build_feature_cols():
                 stype = args.storage_type
                 if column_name not in cache_factors or cache_size == 0:
                     stype = 'DRAM'
-                storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
+                storage_option = tf.StorageOption(storage_type=StorageTypeDict[stype],
                                             storage_path=f"{args.emb_dir}/{column_name}",
                                             storage_size=[1024 * 1024 * cache_size],
                                             cache_strategy = CacheStrategyDict[args.cache_strategy])

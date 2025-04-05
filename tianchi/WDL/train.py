@@ -148,7 +148,7 @@ TUNING_COL = ['C3', 'C12', 'C21', 'C16']
 def get_cache_factors(table):
     all_sizes = {k: c * s for k, (c, s) in table.items()}
     tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
-    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 586007}
+    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 1258743}
     total = sum(filtered_items.values())
     result = {}
     if total > 0:
@@ -454,9 +454,9 @@ def build_feature_columns():
             wide_columns.append(categorical_column)
 
             if manual_caps:
-                cache_size = cache_sizes_list[TUNING_COL.index(column)]
+                cache_size = cache_sizes_list[TUNING_COL.index(column_name)]
             else:
-                cache_size = cache_factors.get(column, 0) * cache_sizes_list[0]
+                cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
             if cache_size >= 0 or args.storage_type == 'DRAM':
                 stype = args.storage_type
                 if column_name not in cache_factors or cache_size == 0:

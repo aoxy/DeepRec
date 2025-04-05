@@ -15,7 +15,7 @@ function log_message() {
 
 record_one_eval() {
     path_cache_cap="${cache_sizes// /_}"
-    rm -rf /home/code/aoxy/DeepRec/tianchi/checkpoints/$model_name/
+    rm -rf /home/code/aoxy/DeepRec/tianchi/checkpoints/$model_name/eval/
     echo "Initial disk read, written sectors(512 bytes): $(get_disk_read_written_sectors)" > $log_dir/eval_disk_usage/disk_usage_$path_cache_cap.txt
     python3 train.py --no_eval --eval_only=True --cache_sizes=$cache_sizes --storage_type=$storage_type 1> $log_dir/eval_dlrm_log/dlrm_log_$path_cache_cap.txt 2>&1 &
     cpp_pid=$!
