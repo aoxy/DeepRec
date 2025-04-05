@@ -1,0 +1,7 @@
+**/metrics4m
+checkpoints/
+checkpoints_back/
+benchmark/archives
+benchmark/mean_archives_DLRM_directio
+**/temp_emb
+**/result

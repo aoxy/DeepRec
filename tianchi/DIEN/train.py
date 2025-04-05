@@ -75,6 +75,8 @@ TABEL_SIZES = {
     "uid_emb_column" : (2682416, 240),
 }
 
+TEMP = ["UID"]
+
 
 class VecAttGRUCell(tf.nn.rnn_cell.RNNCell):
     def __init__(self,
@@ -794,17 +796,6 @@ def train(sess_config,
             tf.train.ProfilerHook(save_steps=args.timeline,
                                   output_dir=checkpoint_dir))
     save_steps = args.save_steps if args.save_steps or args.no_eval else steps
-    '''
-                            Incremental_Checkpoint
-    Please add `save_incremental_checkpoint_secs` in 'tf.train.MonitoredTrainingSession'
-    it's default to None, Incremental_save checkpoint time in seconds can be set 
-    to use incremental checkpoint function, like `tf.train.MonitoredTrainingSession(
-        save_incremental_checkpoint_secs=args.incremental_ckpt)`
-    '''
-    if args.incremental_ckpt and not args.tf:
-        print("Incremental_Checkpoint is not really enabled.")
-        print("Please see the comments in the code.")
-        sys.exit()
 
     time_start = time.perf_counter()
     with tf.train.MonitoredTrainingSession(
@@ -912,6 +903,39 @@ def main(tf_config=None, server=None):
         train_init_op = None
     else:
         train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
+        if args.reuse_stat:
+            from collections import defaultdict
+            import pickle
+            last_pos = [defaultdict(lambda: -1) for _ in TEMP]
+            reuse_distances = [[] for _ in TEMP]
+            visit_list = [[] for _ in TEMP]
+            visit_seq = [[] for _ in TEMP]
+            global_index = 0
+            iterator = train_dataset.make_one_shot_iterator()
+            next_element = iterator.get_next()
+            with tf.Session() as sess:
+                while True:
+                    try:
+                        feature_value = sess.run(next_element)[0]
+                        # print(feature_value.keys(), feature_value)
+                        for i, col in enumerate(TEMP):
+                            for value in feature_value[col]:
+                                values = value.decode("utf-8").split(";")
+                                for v in values:
+                                    if last_pos[i][v] != -1:
+                                        distance = global_index - last_pos[i][v] - 1
+                                        reuse_distances[i].append(distance)
+                                    last_pos[i][v] = global_index
+                                    # visit_list[i].append((v, global_index))
+                                    visit_seq[i].append(v)
+                                global_index += 1
+                    except tf.errors.OutOfRangeError:
+                        pickle.dump(reuse_distances, open("reuse_distances.pk", "wb"))
+                        pickle.dump(TEMP, open("EMBEDDING_COLS.pk", "wb"))
+                        # pickle.dump(visit_list, open("visit_list.pk", "wb"))
+                        pickle.dump(visit_seq, open("visit_seq.pk", "wb"))
+                        break
+            return
         if not (args.no_eval or tf_config):
             test_dataset = build_model_input(test_file, batch_size, 1)
             iterator = tf.data.Iterator.from_structure(
@@ -1165,6 +1189,9 @@ def get_arg_parser():
                         type=int,
                         default=256)
     parser.add_argument('--eval_only',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument('--reuse_stat',
                         type=boolean_string,
                         default=False)
     return parser

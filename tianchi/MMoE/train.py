@@ -128,10 +128,12 @@ TABEL_SIZES = {
     "cms_segid" : (96, 3072),
 }
 
+TUNING_COL = ['adgroup_id', 'customer', 'user_id', 'campaign_id']
+
 def get_cache_factors(table):
     all_sizes = {k: c * s for k, (c, s) in table.items()}
     tf.logging.info(f'Total Embedding Size = {sum(all_sizes.values())} Byte')
-    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 13892}
+    filtered_items = {k: c * s for k, (c, s) in table.items() if c >= 24661}
     total = sum(filtered_items.values())
     result = {}
     if total > 0:
@@ -399,9 +401,11 @@ def build_feature_cols():
     os.makedirs(args.emb_dir, exist_ok=True)
     cache_factors = get_cache_factors(TABEL_SIZES)
 
+    manual_caps = False
     if len(args.cache_sizes) == 1:
-        cache_sizes_list = [int(args.cache_sizes[0]) for _ in HASH_INPUTS]
-    elif len(args.cache_sizes) == len(HASH_INPUTS):
+        cache_sizes_list = [int(args.cache_sizes[0])]
+    elif len(args.cache_sizes) == len(TUNING_COL):
+        manual_caps = True
         cache_sizes_list = [int(x) for x in args.cache_sizes]
     else:
         print("Invalid cache_sizes:", args.cache_sizes)
@@ -417,15 +421,21 @@ def build_feature_cols():
                 hash_bucket_size=HASH_BUCKET_SIZES[column_name],
                 dtype=tf.string)
             
-            cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
-            if cache_size > 0 or args.storage_type == 'DRAM':
+            if manual_caps:
+                cache_size = cache_sizes_list[TUNING_COL.index(column_name)]
+            else:
+                cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
+            if cache_size >= 0 or args.storage_type == 'DRAM':
+                stype = args.storage_type
+                if column_name not in cache_factors or cache_size == 0:
+                    stype = 'DRAM'
                 storage_option = tf.StorageOption(storage_type=StorageTypeDict[args.storage_type],
                                             storage_path=f"{args.emb_dir}/{column_name}",
                                             storage_size=[1024 * 1024 * cache_size],
                                             cache_strategy = CacheStrategyDict[args.cache_strategy])
 
                 ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
-                tf.logging.info(f'[Feature {column_name}] Use {args.storage_type}, {args.cache_strategy}, Cache Capacity {cache_size}MB')
+                tf.logging.info(f'[Feature {column_name}] Use {stype}, {args.cache_strategy}, Cache Capacity {cache_size}MB')
                 categorical_column = feature_column_v2.categorical_column_with_embedding(column_name, dtype=tf.string, ev_option=ev_opt)
 
             

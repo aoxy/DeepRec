@@ -143,7 +143,7 @@ TABEL_SIZES = {
     "C16" : (1258743, 1536),
 }
 
-TUNING_COL = ['C3', 'C12', 'C21', 'C4', 'C16']
+TUNING_COL = ['C3', 'C12', 'C21', 'C16']
 
 def get_cache_factors(table):
     all_sizes = {k: c * s for k, (c, s) in table.items()}
@@ -435,9 +435,11 @@ def build_feature_columns():
 
     os.makedirs(args.emb_dir, exist_ok=True)
 
+    manual_caps = False
     if len(args.cache_sizes) == 1:
-        cache_sizes_list = [int(args.cache_sizes[0]) for _ in CATEGORICAL_COLUMNS]
+        cache_sizes_list = [int(args.cache_sizes[0])]
     elif len(args.cache_sizes) == len(TUNING_COL):
+        manual_caps = True
         cache_sizes_list = [int(x) for x in args.cache_sizes]
     else:
         print("Invalid cache_sizes:", args.cache_sizes)
@@ -451,11 +453,13 @@ def build_feature_columns():
                 column_name, hash_bucket_size=10000, dtype=tf.string)
             wide_columns.append(categorical_column)
 
-            # cache_size = cache_factors.get(column_name, 0) * cache_sizes_list[0]
-            cache_size = cache_sizes_list[TUNING_COL.index(column_name)] if column_name in TUNING_COL else 1
-            if cache_size > 0 or args.storage_type == 'DRAM':
+            if manual_caps:
+                cache_size = cache_sizes_list[TUNING_COL.index(column)]
+            else:
+                cache_size = cache_factors.get(column, 0) * cache_sizes_list[0]
+            if cache_size >= 0 or args.storage_type == 'DRAM':
                 stype = args.storage_type
-                if column_name not in TUNING_COL:
+                if column_name not in cache_factors or cache_size == 0:
                     stype = 'DRAM'
                 storage_option = tf.StorageOption(storage_type=StorageTypeDict[stype],
                                             storage_path=f"{args.emb_dir}/{column_name}",
@@ -463,7 +467,7 @@ def build_feature_columns():
                                             cache_strategy = CacheStrategyDict[args.cache_strategy])
 
                 ev_opt = tf.EmbeddingVariableOption(storage_option=storage_option)
-                tf.logging.info(f'[Feature {column_name}] Use {args.storage_type}, {args.cache_strategy}, Cache Capacity {cache_size}MB')
+                tf.logging.info(f'[Feature {column_name}] Use {stype}, {args.cache_strategy}, Cache Capacity {cache_size}MB')
                 categorical_column = feature_column_v2.categorical_column_with_embedding(column_name, dtype=tf.string, ev_option=ev_opt)
 
 
@@ -505,10 +509,10 @@ def train(sess_config,
     hooks = []
     hooks.extend(input_hooks)
 
-    sharded_saver = tf_config != None
     scaffold = tf.train.Scaffold(
-        local_init_op=tf.group(tf.local_variables_initializer(), data_init_op),
-        saver=tf.train.Saver(max_to_keep=args.keep_checkpoint_max, sharded=sharded_saver))
+        local_init_op=tf.group(tf.tables_initializer(),
+                               tf.local_variables_initializer(), data_init_op),
+        saver=tf.train.Saver(max_to_keep=args.keep_checkpoint_max))
 
     stop_hook = tf.train.StopAtStepHook(last_step=steps)
     log_hook = tf.train.LoggingTensorHook(
@@ -523,17 +527,6 @@ def train(sess_config,
             tf.train.ProfilerHook(save_steps=args.timeline,
                                   output_dir=checkpoint_dir))
     save_steps = args.save_steps if args.save_steps or args.no_eval else steps
-    '''
-                            Incremental_Checkpoint
-    Please add `save_incremental_checkpoint_secs` in 'tf.train.MonitoredTrainingSession'
-    it's default to None, Incremental_save checkpoint time in seconds can be set
-    to use incremental checkpoint function, like `tf.train.MonitoredTrainingSession(
-        save_incremental_checkpoint_secs=args.incremental_ckpt)`
-    '''
-    if args.incremental_ckpt and not args.tf:
-        print("Incremental_Checkpoint is not really enabled.")
-        print("Please see the comments in the code.")
-        sys.exit()
 
     with tf.train.MonitoredTrainingSession(
             master=server.target if server else '',
@@ -541,9 +534,9 @@ def train(sess_config,
             hooks=hooks,
             scaffold=scaffold,
             checkpoint_dir=checkpoint_dir,
-            save_checkpoint_steps=save_steps,
+            save_checkpoint_steps=steps,
             summary_dir=checkpoint_dir,
-            save_summaries_steps=args.save_steps,
+            save_summaries_steps=None,
             config=sess_config) as sess:
         while not sess.should_stop():
             sess.run([model.loss, model.train_op])
@@ -645,6 +638,38 @@ def main(tf_config=None, server=None):
         train_init_op = None
     else:
         train_dataset = build_model_input(train_file, batch_size, no_of_epochs)
+        if args.reuse_stat:
+            from collections import defaultdict
+            import pickle
+            last_pos = [defaultdict(lambda: -1) for _ in TEMP]
+            reuse_distances = [[] for _ in TEMP]
+            visit_list = [[] for _ in TEMP]
+            visit_seq = [[] for _ in TEMP]
+            global_index = 0
+            iterator = train_dataset.make_one_shot_iterator()
+            next_element = iterator.get_next()
+            with tf.Session() as sess:
+                while True:
+                    try:
+                        feature_value = sess.run(next_element)[0]
+                        for i, col in enumerate(TEMP):
+                            for value in feature_value[col]:
+                                values = value.decode("utf-8").split(";")
+                                for v in values:
+                                    if last_pos[i][v] != -1:
+                                        distance = global_index - last_pos[i][v] - 1
+                                        reuse_distances[i].append(distance)
+                                    last_pos[i][v] = global_index
+                                    # visit_list[i].append((v, global_index))
+                                    visit_seq[i].append(v)
+                                global_index += 1
+                    except tf.errors.OutOfRangeError:
+                        pickle.dump(reuse_distances, open("reuse_distances.pk", "wb"))
+                        pickle.dump(TEMP, open("EMBEDDING_COLS.pk", "wb"))
+                        # pickle.dump(visit_list, open("visit_list.pk", "wb"))
+                        pickle.dump(visit_seq, open("visit_seq.pk", "wb"))
+                        break
+            return
         if not (args.no_eval or tf_config):
             test_dataset = build_model_input(test_file, batch_size, 1)
             iterator = tf.data.Iterator.from_structure(
@@ -904,6 +929,9 @@ def get_arg_parser():
                         nargs='+',
                         default=[256])
     parser.add_argument('--eval_only',
+                        type=boolean_string,
+                        default=False)
+    parser.add_argument('--reuse_stat',
                         type=boolean_string,
                         default=False)
 

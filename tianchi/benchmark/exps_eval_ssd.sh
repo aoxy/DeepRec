@@ -15,15 +15,16 @@ function log_message() {
 
 record_one_eval() {
     path_cache_cap="${cache_sizes// /_}"
+    rm -rf /home/code/aoxy/DeepRec/tianchi/checkpoints/$model_name/
     echo "Initial disk read, written sectors(512 bytes): $(get_disk_read_written_sectors)" > $log_dir/eval_disk_usage/disk_usage_$path_cache_cap.txt
-    python3 eval.py --cache_sizes=$cache_sizes --storage_type=$storage_type 1> $log_dir/eval_dlrm_log/dlrm_log_$path_cache_cap.txt 2>&1 &
+    python3 train.py --no_eval --eval_only=True --cache_sizes=$cache_sizes --storage_type=$storage_type 1> $log_dir/eval_dlrm_log/dlrm_log_$path_cache_cap.txt 2>&1 &
     cpp_pid=$!
     top -b -d 1 -p $cpp_pid > $log_dir/eval_memory_usage/memory_usage_$path_cache_cap.txt &
     top_pid=$!
     wait $cpp_pid
     kill $top_pid
     echo "Final disk read, written sectors(512 bytes): $(get_disk_read_written_sectors)" >> $log_dir/eval_disk_usage/disk_usage_$path_cache_cap.txt
-    log_message "$model_name Evaluate with $storage_type and [$cache_sizes] MB Cache done."
+    log_message "Evaluate with $storage_type and [$cache_sizes] MB Cache done. $(pwd)"
     rm -rf temp_emb/*
 }
 
@@ -40,14 +41,14 @@ warm_up() {
 
 cd /home/code/aoxy/DeepRec/tianchi/$model_name/
 
-warm_up
-echo "Warm Up done."
+# warm_up
+# echo "Warm Up done."
 
 declare -A MODEL_CONFIG=(
-    [DLRM]="4000 6000"
-    [MMoE]="200 300"
+    [DLRM]="3000 4000 5000 6000"
+    [MMoE]="510"
     [WDL]="4000 6000"
-    [DIEN]="250 350"
+    [DIEN]="650"
 )
 
 cache_sizes_ls=(${MODEL_CONFIG["${model_name:-DLRM}"]})

@@ -43,12 +43,12 @@ cd /home/code/aoxy/DeepRec/tianchi/$model_name/
 
 # warm_up
 # echo "Warm Up done."
-
+# [DLRM]="524 2 33 1941|625 625 625 625|625 4 120 1751|825 4 120 1551|425 4 120 1951|1125 4 120 1251|325 4 120 2051"
 declare -A MODEL_CONFIG=(
-    [DLRM]="524 2 33 1941|524 3 33 1940|524 4 33 1939|524 4 63 1909|524 4 93 1879|524 4 120 1852|624 4 120 1752|724 4 120 1652|824 4 120 1552|424 4 120 1952"
-    [MMoE]="90"
-    [WDL]="2000"
-    [DIEN]="100"
+    [DLRM]="2400"
+    [MMoE]="510"
+    [WDL]="2100"
+    [DIEN]="650"
 )
 
 
@@ -59,9 +59,9 @@ do
     mkdir -p $log_dir/train_dlrm_log
     mkdir -p $log_dir/train_memory_usage
 
-    # storage_type="DRAM"
-    # cache_sizes=00
-    # record_one_train
+    storage_type="DRAM"
+    cache_sizes=00
+    record_one_train
 
     storage_type="DRAM_SSDHASH"
     IFS='|' read -ra config_groups <<< "${MODEL_CONFIG[$model_name]}"
