@@ -9,14 +9,16 @@ swapoff -a
 swapon /home/axy/code/swapfile
 swapon -s
 
-bash start_exps.sh "DLRM" "directio"
-mv archives archives_DLRM_directio
+# bash start_exps.sh "DLRM" "directio"
+# mv archives archives_DLRM_directio
 
 bash start_exps.sh "MMoE" "directio"
 mv archives archives_MMoE_directio
 
 bash start_exps.sh "WDL" "directio"
 mv archives archives_WDL_directio
+
+bash sensetive.sh > script_output_sensetive_DLRM_eval.log 2>&1 &
 
 # bash start_exps.sh "DIEN" "directio"
 # mv archives archives_DIEN_directio

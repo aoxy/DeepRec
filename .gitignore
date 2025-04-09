@@ -47,3 +47,6 @@ Podfile.lock
 Pods
 xcuserdata
 *~
+axyscripts
+
+tianchi/benchmark/used_archives

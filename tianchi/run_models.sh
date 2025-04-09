@@ -63,8 +63,8 @@ prepare_dir
 
 storage_type="DRAM"
 cache_sizes="1"
-# record_one_train
-record_one_eval
+record_one_train
+# record_one_eval
 
 # storage_type="DRAM_SSDHASH"
 # cache_sizes="15240"
@@ -78,8 +78,8 @@ prepare_dir
 
 storage_type="DRAM"
 cache_sizes="1"
-# record_one_train
-record_one_eval
+record_one_train
+# record_one_eval
 
 # storage_type="DRAM_SSDHASH"
 # cache_sizes="5240"
@@ -93,8 +93,8 @@ prepare_dir
 
 storage_type="DRAM"
 cache_sizes="1"
-# record_one_train
-record_one_eval
+record_one_train
+# record_one_eval
 
 # storage_type="DRAM_SSDHASH"
 # cache_sizes="15240"
@@ -108,8 +108,8 @@ prepare_dir
 
 storage_type="DRAM"
 cache_sizes="1"
-# record_one_train
-record_one_eval
+record_one_train
+# record_one_eval
 
 # storage_type="DRAM_SSDHASH"
 # cache_sizes="5240"
