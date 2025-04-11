@@ -102,7 +102,8 @@ class BatchCache {
     }
     return strings::StrCat("HitRate = ", hit_rate,
                            " %, visit_count = ", total_num_access,
-                           ", hit_count = ", total_num_hit);
+                           ", hit_count = ", total_num_hit,
+                           ", size = ", size());
   }
   virtual mutex_lock maybe_lock_cache(mutex& mu, mutex& temp_mu,
                                       bool use_locking) {
@@ -197,6 +198,7 @@ class LRUCache : public BatchCache<K> {
     }
     evic_node->next = tail;
     tail->pre = evic_node;
+    BatchCache<K>::size_data_[0].size_ -= true_size;
     return true_size;
   }
 
@@ -233,6 +235,7 @@ class LRUCache : public BatchCache<K> {
         head->next = newNode;
         newNode->pre = head;
         mp[id] = newNode;
+        BatchCache<K>::size_data_[0].size_ += 1;
         BatchCache<K>::size_data_[0].num_miss_++;
       }
     }
@@ -345,16 +348,7 @@ class ShardedLRUCache: public BatchCache<K> {
       shard.head = nullptr;
       delete shard.tail;
       shard.tail = nullptr;
-      shard.size = 0;
     }
-  }
-
-  size_t size() override {
-    size_t total_size = 0;
-    for (const auto& shard : shards_) {
-      total_size += shard->size;
-    }
-    return total_size;
   }
 
   size_t get_capacity() override { return capacity_; }
@@ -362,6 +356,7 @@ class ShardedLRUCache: public BatchCache<K> {
   void set_capacity(size_t new_capacity) override { capacity_ = new_capacity; }
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) override {
+    // mutex_lock l(mu_);
     const size_t num_shards = shards_.size();
     size_t num_per_shard = k_size / num_shards;
     size_t remaining = k_size % num_shards;
@@ -384,7 +379,7 @@ class ShardedLRUCache: public BatchCache<K> {
       }
       evic_node->next = shard.tail;
       shard.tail->prev = evic_node;
-      shard.size -= true_num;
+      BatchCache<K>::size_data_[i].size_ -= true_num;
     }
     return true_size;
   }
@@ -407,12 +402,14 @@ class ShardedLRUCache: public BatchCache<K> {
   }
 
   void update(const K* batch_ids, size_t batch_size, bool use_locking = true) override {
-    mutex temp_mu;
+    // mutex_lock l(mu_);
+    // mutex temp_mu;
     for (size_t i = 0; i < batch_size; ++i) {
       K id = batch_ids[i];
       const size_t shard_idx = id & shard_mask_;
       LRUShard& shard = *shards_[shard_idx];
-      auto lock = BatchCache<K>::maybe_lock_cache(shard.mu_, temp_mu, use_locking);
+      mutex_lock l(shard.mu_);
+      // auto lock = BatchCache<K>::maybe_lock_cache(shard.mu_, temp_mu, use_locking);
       typename std::map<K, LRUNode*>::iterator it = shard.mp.find(id);
       if (it != shard.mp.end()) {
         LRUNode* node = it->second;
@@ -430,7 +427,7 @@ class ShardedLRUCache: public BatchCache<K> {
         shard.head->next = newNode;
         newNode->prev = shard.head;
         shard.mp[id] = newNode;
-        shard.size++;
+        BatchCache<K>::size_data_[shard_idx].size_ += 1;
         BatchCache<K>::size_data_[shard_idx].num_miss_++;
       }
     }
@@ -512,13 +509,12 @@ class ShardedLRUCache: public BatchCache<K> {
     std::unordered_map<K, PrefetchNode<K>*> prefetch_id_table;
     mutex mu_;
     mutex prefetch_mu_;
-    uint64 size = 0;
   };
 
   std::vector<std::unique_ptr<LRUShard>> shards_;
   uint64 shard_mask_;
   size_t capacity_;
-
+  mutex mu_;
   std::string name_;
 };
 
