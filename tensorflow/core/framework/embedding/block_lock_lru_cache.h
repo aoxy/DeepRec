@@ -133,6 +133,9 @@ class BlockLockLRUCache : public BatchCache<K> {
   }
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) {
+    if (BatchCache<K>::size() <= capacity_) {
+      return 0;
+    }
     mutex_lock l(evic_mu_);
     size_t evicted_size = evicted.size_lockless();
     if (evicted_size == 0) {

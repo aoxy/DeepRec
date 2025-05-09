@@ -356,7 +356,10 @@ class ShardedLRUCache: public BatchCache<K> {
   void set_capacity(size_t new_capacity) override { capacity_ = new_capacity; }
 
   size_t get_evic_ids(K* evic_ids, size_t k_size) override {
-    // mutex_lock l(mu_);
+    if (BatchCache<K>::size() <= capacity_) {
+      return 0;
+    }
+    mutex_lock l(mu_);
     const size_t num_shards = shards_.size();
     size_t num_per_shard = k_size / num_shards;
     size_t remaining = k_size % num_shards;
